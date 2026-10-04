@@ -1,8 +1,11 @@
 use freya::prelude::*;
+use freya::query::{MutationCapability, MutationStateData, UseMutation};
 use oneclient_auth::MinecraftAccount;
 
-use crate::components::{Avatar, Button, Icon, IconType, use_microsoft_login};
-use crate::hooks::{try_default_account, use_current_account};
+use crate::components::{Avatar, Button, Icon, IconType, TextInput, use_microsoft_login};
+use crate::hooks::{
+    AddOfflineAccountKeys, try_default_account, use_add_offline_account, use_current_account,
+};
 use crate::routes::Route;
 use crate::theme::colors;
 use crate::view::onboarding::{
@@ -16,9 +19,21 @@ impl Component for OnboardingAccount {
     fn render(&self) -> impl IntoElement {
         let account_query = use_current_account();
         let msa = use_microsoft_login();
+        let add_offline = use_add_offline_account();
+        let username = use_state(String::new);
 
         let account = try_default_account(&account_query);
         let has_account = account.is_some();
+
+        let offline_error = mutation_err_text(&add_offline);
+
+        let on_confirm_offline = move |_| {
+            let name = username.peek().trim().to_string();
+            if name.is_empty() {
+                return;
+            }
+            add_offline.mutate(AddOfflineAccountKeys { username: name });
+        };
 
         let content = rect()
             .vertical()
@@ -26,14 +41,21 @@ impl Component for OnboardingAccount {
             .spacing(24.)
             .child(step_heading(
                 "Account",
-                "Before you continue, we require you to own a copy of Minecraft: Java Edition.",
+                "Sign in with Microsoft, or add an offline account to continue.",
             ))
             .child(match &account {
                 Some(account) => account_preview(account).into_element(),
                 None => {
                     let start = msa.clone();
-                    sign_in_card(msa.pending, msa.error.clone(), move |_| start.start())
-                        .into_element()
+                    sign_in_card(
+                        msa.pending,
+                        msa.error.clone(),
+                        username,
+                        offline_error,
+                        move |_| start.start(),
+                        on_confirm_offline,
+                    )
+                    .into_element()
                 }
             })
             .into_element();
@@ -96,7 +118,10 @@ fn account_preview(account: &MinecraftAccount) -> impl IntoElement {
 fn sign_in_card(
     pending: bool,
     error: Option<String>,
+    username: State<String>,
+    offline_error: Option<String>,
     on_add: impl FnMut(Event<PressEventData>) + 'static,
+    on_confirm_offline: impl FnMut(Event<PressEventData>) + 'static,
 ) -> impl IntoElement {
     rect()
         .vertical()
@@ -115,18 +140,51 @@ fn sign_in_card(
                     "Add Account"
                 }),
         )
-        .maybe_child(error.map(|message| {
-            rect()
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .spacing(6.)
-                .child(
-                    Icon::new(IconType::AlertTriangle)
-                        .size(13.)
-                        .color(colors::danger()),
-                )
-                .child(label().text(message).font_size(12.).color(colors::danger()))
-                .into_element()
-        }))
+        .maybe_child(error.map(alert_line))
+        .child(
+            label()
+                .text("Or continue with an offline account")
+                .font_size(13.)
+                .font_weight(FontWeight::MEDIUM)
+                .color(colors::fg_secondary()),
+        )
+        .child(TextInput::new(username).placeholder("Offline username"))
+        .child(
+            Button::new()
+                .secondary()
+                .large()
+                .on_press(on_confirm_offline)
+                .child(Icon::new(IconType::Plus).size(16.))
+                .text("Add offline account"),
+        )
+        .maybe_child(offline_error.map(alert_line))
         .into_element()
+}
+
+fn alert_line(message: String) -> freya::prelude::Element {
+    rect()
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .spacing(6.)
+        .child(
+            Icon::new(IconType::AlertTriangle)
+                .size(13.)
+                .color(colors::danger()),
+        )
+        .child(label().text(message).font_size(12.).color(colors::danger()))
+        .into_element()
+}
+
+fn mutation_err_text<M>(mutation: &UseMutation<M>) -> Option<String>
+where
+    M: MutationCapability,
+    M::Err: std::fmt::Display,
+{
+    match &*mutation.read().state() {
+        MutationStateData::Settled { res: Err(err), .. } => Some(err.to_string()),
+        MutationStateData::Loading {
+            res: Some(Err(err)),
+        } => Some(err.to_string()),
+        _ => None,
+    }
 }

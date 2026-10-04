@@ -40,7 +40,7 @@ pub use queries::{
     StorageActionMutation, StorageReportQuery, TermsQuery, UploadLogKeys, UploadLogMutation,
     UseDiscardLeftovers, UseLogAction, UseRefreshAccount, UseRemoveAccount, UseScreenshotAction,
     UseSetDefaultAccount, UseStorageAction, UseUploadLog, VERSIONS_PAGE_SIZE,
-    accounts_have_microsoft, available_bundles, bundle_overrides_map, bundles_with_status_items,
+    available_bundles, bundle_overrides_map, bundles_with_status_items,
     category_list, changelog_error, changelog_groups, changelog_is_loading, cluster_art_url,
     cluster_content_items, content_type_for_slug, disable_warnings, game_versions,
     has_migration_data, invalidate_cluster_content_queries, invalidate_cluster_queries,
