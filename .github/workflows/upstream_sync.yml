@@ -137,15 +137,16 @@ jobs:
           gh run watch "$run_id" --exit-status --interval 30 > /dev/null
 
           # The release workflow ships a draft for a human to publish; this fork
-          # publishes it once every leg is green.
-          head_sha="$(gh run view "$run_id" --json headSha --jq .headSha)"
-          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            --jq ".[] | select(.draft) | select(.target_commitish == \"$head_sha\") | .tag_name" \
-            | while read -r tag; do
-                [ -n "$tag" ] || continue
-                echo "Publishing $tag"
-                gh release edit "$tag" --draft=false
-              done
+          # publishes it once every leg is green. The draft targets the version
+          # bump commit (not the run's head SHA), so match by the version that
+          # origin/main actually shipped.
+          git fetch --no-tags origin main
+          shipped="$(git show origin/main:Cargo.toml | sed -n -E '/^\[workspace\.package\]/,/^\[/ s/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -n1)"
+          tag="oneclient-$shipped"
+          if [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = "true" ]; then
+            echo "Publishing $tag"
+            gh release edit "$tag" --draft=false
+          fi
 
           # release: published will not spawn changelog_publish (GITHUB_TOKEN
           # recursion guard), so refresh changelog.json explicitly.
