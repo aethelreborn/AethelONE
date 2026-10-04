@@ -6,6 +6,7 @@
 mod assets;
 pub mod cli;
 mod components;
+pub mod cosmetics_proxy;
 pub mod essential;
 pub mod events;
 pub(crate) mod file_content;

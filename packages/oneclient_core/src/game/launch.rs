@@ -30,6 +30,16 @@ pub fn is_running(state: &LauncherState, cluster_id: i64) -> bool {
     state.games.is_running(cluster_id)
 }
 
+/// True while the built-in cosmetics proxy is listening, so the game is only
+/// pointed at it when it can actually serve.
+fn cosmetics_proxy_reachable() -> bool {
+    let probe = std::net::SocketAddr::from((
+        std::net::Ipv4Addr::LOCALHOST,
+        oneclient_common::constants::COSMETICS_PROXY_PORT,
+    ));
+    std::net::TcpStream::connect_timeout(&probe, Duration::from_millis(250)).is_ok()
+}
+
 #[derive(Debug, Clone)]
 pub struct LaunchedGame {
     pub cluster_id: i64,
@@ -287,7 +297,13 @@ async fn start(
         tracing::warn!(cluster_id, error = %err, "failed to write allowed_symlinks.txt");
     }
 
-    let custom_args = profile.launch_args.clone().unwrap_or_default();
+    let mut custom_args = profile.launch_args.clone().unwrap_or_default();
+    if state.settings.read().cosmetics_unlock && cosmetics_proxy_reachable() {
+        custom_args.push_str(&format!(
+            " -Dpolyplus.apiUrl={}",
+            oneclient_common::constants::COSMETICS_PROXY_URL
+        ));
+    }
     let loader_version_id = loader_version.as_ref().map(|lv| lv.id.as_str());
 
     let mods_in_cluster =
@@ -330,7 +346,7 @@ async fn start(
         profile
             .mem_max
             .unwrap_or_else(oneclient_common::default_mem_max),
-        profile.launch_args.clone().unwrap_or_default(),
+        custom_args.clone(),
         &java.os_arch,
         java.major,
     )?;

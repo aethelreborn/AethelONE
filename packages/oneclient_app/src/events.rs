@@ -346,6 +346,7 @@ pub async fn start_launcher(
 
     oneclient_net::status::start(state.services.requester.clone());
     oneclient_polyplus::start(std::sync::Arc::clone(&state.auth));
+    crate::cosmetics_proxy::start();
     oneclient_core::run_startup_tasks(&state);
 
     let data_dir = oneclient_common::paths::data_dir()

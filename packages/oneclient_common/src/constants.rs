@@ -18,6 +18,12 @@ pub const TOS_URL: &str = "https://polyfrost.org/legal/terms";
 pub const PRIVACY_URL: &str = "https://polyfrost.org/legal/privacy";
 pub const PLUS_BACKEND_URL: &str = "https://plus.polyfrost.org";
 
+/// Loopback endpoint of the built-in Poly+ cosmetics proxy
+/// (`oneclient_app::cosmetics_proxy`); the port is what gets bound and what
+/// `-Dpolyplus.apiUrl` points the game at.
+pub const COSMETICS_PROXY_PORT: u16 = 8777;
+pub const COSMETICS_PROXY_URL: &str = "http://127.0.0.1:8777";
+
 pub const SENTRY_DSN: &str = match option_env!("ONECLIENT_SENTRY_DSN") {
     Some(dsn) => dsn,
     None => {

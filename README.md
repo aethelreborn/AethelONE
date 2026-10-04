@@ -83,25 +83,20 @@ Linux packages ship with a minisign signature generated in CI from the updater k
 (`CARGO_PACKAGER_SIGN_PRIVATE_KEY` secret); the public key is compiled into the app. Windows/macOS installer
 signing is optional and stays disabled unless the repository is configured with Apple and SignPath secrets.
 
-## Local cosmetics unlock
+## All cosmetics unlocked (built in)
 
-All Poly+ cosmetics (capes, wings, pets, emotes) can read as owned **on this machine only**:
+Every Poly+ cosmetic — capes, wings, pets, auras, emotes — reads as owned on
+your machine, automatically. There is nothing to run: the launcher starts a
+loopback proxy, points the Poly+ mod at it with `-Dpolyplus.apiUrl` on every
+launch, and serves your locker from the public catalog.
 
-```sh
-python3 tools/polyplus_cosmetics_proxy.py
-```
-
-Then add to each cluster's **JVM Arguments** (cluster settings):
-
-```
--Dpolyplus.apiUrl=http://127.0.0.1:8777
-```
-
-The proxy relays every Poly+ call to the real backend unchanged and only answers
-`/cosmetics/player` locally, so your locker shows the full catalog and equipment
-choices persist under `~/.aethelone/`. Nothing is uploaded or shared — other
-players still see the official ownership state. The proxy must be running while
-the game launches with the flag.
+- Equipment choices persist under `~/.aethelone/` across restarts.
+- Works offline and with offline (cracked) accounts — no Poly+ login needed.
+- Other players always see the official ownership state; nothing is uploaded,
+  mirrored or shared, and textures still come straight from the public CDN.
+- Toggle it under **Settings → Launcher → All Cosmetics Unlocked** (on by
+  default). When off — or when a cluster is launched outside the launcher —
+  the game talks to the real Poly+ backend as usual.
 
 ## Credits & license
 

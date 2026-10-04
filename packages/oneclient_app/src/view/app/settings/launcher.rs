@@ -32,6 +32,11 @@ impl Component for SettingsLauncher {
             move || v
         });
 
+        let cosmetics_unlock = use_state({
+            let v = settings.cosmetics_unlock;
+            move || v
+        });
+
         let crash_reporting = use_state({
             let v = settings.crash_reporting;
             move || v
@@ -60,6 +65,7 @@ impl Component for SettingsLauncher {
         let mut first = use_state(|| true);
         use_side_effect(move || {
             let discord = *discord_rpc.read();
+            let cosmetics = *cosmetics_unlock.read();
             let crash = *crash_reporting.read();
             let maximized = *start_maximized.read();
             let background = *run_in_background.read();
@@ -71,6 +77,7 @@ impl Component for SettingsLauncher {
             }
             dispatch.edit_settings(|next| {
                 next.discord_enabled = discord;
+                next.cosmetics_unlock = cosmetics;
                 next.crash_reporting = crash;
                 next.start_maximized = maximized;
                 next.run_in_background = background;
@@ -119,6 +126,16 @@ impl Component for SettingsLauncher {
                     toggle(start_maximized),
                     start_maximized,
                     defaults.start_maximized,
+                ),
+            ))
+            .child(settings_row(
+                IconType::Colors,
+                "All Cosmetics Unlocked",
+                "Every Poly+ cape, wing and emote owned locally — equipping and sync run inside AethelONE, on this machine only.",
+                resettable(
+                    toggle(cosmetics_unlock),
+                    cosmetics_unlock,
+                    defaults.cosmetics_unlock,
                 ),
             ))
             .child(settings_row(
