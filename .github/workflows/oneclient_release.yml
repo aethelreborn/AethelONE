@@ -520,6 +520,8 @@ jobs:
           OS_KEY: ${{ matrix.os_key }}
           ARCH: ${{ matrix.arch }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -567,9 +569,21 @@ jobs:
             cp "${rpm_matches[0]}" "$OUT_DIR/$rpm_unique"
           fi
 
+          # The .deb/.rpm are not cargo-packager updater formats, so packaging never
+          # emits a .sig for them. Sign them here: the launcher fetches `<asset>.sig`
+          # next to the package and verifies it with the updater public key before
+          # handing the package to apt/dnf.
+          for pkg in ${deb_unique:+"$OUT_DIR/$deb_unique"} ${rpm_unique:+"$OUT_DIR/$rpm_unique"}; do
+            [ -e "$pkg" ] || continue
+            cargo packager signer sign \
+              --private-key "$CARGO_PACKAGER_SIGN_PRIVATE_KEY" \
+              --password "$CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD" \
+              "$pkg"
+          done
+
           # Upload human-facing installers (dmg/renamed deb/renamed rpm/AppImage/signed exe) +
           # the renamed updater bundle and its .sig. Skip the un-renamed updater bundle to avoid clashes.
-          for f in "$OUT_DIR"/*.dmg ${deb_unique:+"$OUT_DIR/$deb_unique"} ${rpm_unique:+"$OUT_DIR/$rpm_unique"} "$OUT_DIR"/*.AppImage "$OUT_DIR"/*-setup.exe "$OUT_DIR/$unique" "$OUT_DIR/$unique.sig"; do
+          for f in "$OUT_DIR"/*.dmg ${deb_unique:+"$OUT_DIR/$deb_unique"} ${deb_unique:+"$OUT_DIR/$deb_unique.sig"} ${rpm_unique:+"$OUT_DIR/$rpm_unique"} ${rpm_unique:+"$OUT_DIR/$rpm_unique.sig"} "$OUT_DIR"/*.AppImage "$OUT_DIR"/*-setup.exe "$OUT_DIR/$unique" "$OUT_DIR/$unique.sig"; do
             [ -e "$f" ] || continue
             gh release upload "$TAG" "$f" --clobber
           done

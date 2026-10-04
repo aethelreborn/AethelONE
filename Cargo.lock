@@ -4969,6 +4969,7 @@ dependencies = [
  "polyio",
  "pulldown-cmark",
  "regex",
+ "reqwest 0.13.5",
  "rfd",
  "rust-embed",
  "sysinfo",

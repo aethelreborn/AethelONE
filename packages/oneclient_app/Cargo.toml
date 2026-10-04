@@ -25,6 +25,7 @@ oneclient_polyplus.workspace = true
 oneclient_net.workspace = true
 oneclient_core.workspace = true
 oneclient_db.workspace = true
+reqwest.workspace = true
 chrono.workspace = true
 oneclient_macro = { workspace = true, features = ["freya"] }
 
