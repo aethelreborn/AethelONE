@@ -30,14 +30,46 @@ pub fn is_running(state: &LauncherState, cluster_id: i64) -> bool {
     state.games.is_running(cluster_id)
 }
 
-/// True while the built-in cosmetics proxy is listening, so the game is only
-/// pointed at it when it can actually serve.
-fn cosmetics_proxy_reachable() -> bool {
-    let probe = std::net::SocketAddr::from((
-        std::net::Ipv4Addr::LOCALHOST,
-        oneclient_common::constants::COSMETICS_PROXY_PORT,
-    ));
-    std::net::TcpStream::connect_timeout(&probe, Duration::from_millis(250)).is_ok()
+/// True while the built-in cosmetics proxy is listening and answering as ours,
+/// so the game is only pointed at it when it can actually serve. The marker
+/// check keeps a foreign process squatting on the port from swallowing Poly+.
+async fn cosmetics_proxy_reachable() -> bool {
+    use oneclient_common::constants::{
+        COSMETICS_PROXY_MARKER, COSMETICS_PROXY_MARKER_VALUE, COSMETICS_PROXY_PORT,
+        COSMETICS_PROXY_PROBE, COSMETICS_PROXY_URL,
+    };
+
+    let url = format!("{COSMETICS_PROXY_URL}{COSMETICS_PROXY_PROBE}");
+    let probe = tokio::time::timeout(Duration::from_millis(250), async move {
+        let response = reqwest::get(&url).await.map_err(|err| err.to_string())?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(format!("probe status {}", response.status()));
+        }
+        let marker = response
+            .headers()
+            .get(COSMETICS_PROXY_MARKER)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if marker != COSMETICS_PROXY_MARKER_VALUE {
+            return Err(format!("foreign server on port {COSMETICS_PROXY_PORT}"));
+        }
+        Ok(())
+    })
+    .await;
+
+    match probe {
+        Ok(Ok(())) => true,
+        Ok(Err(err)) => {
+            tracing::warn!("cosmetics unlock: proxy probe failed: {err}");
+            false
+        }
+        Err(_) => {
+            tracing::warn!(
+                "cosmetics unlock: proxy probe timed out on port {COSMETICS_PROXY_PORT}"
+            );
+            false
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -298,11 +330,17 @@ async fn start(
     }
 
     let mut custom_args = profile.launch_args.clone().unwrap_or_default();
-    if state.settings.read().cosmetics_unlock && cosmetics_proxy_reachable() {
-        custom_args.push_str(&format!(
-            " -Dpolyplus.apiUrl={}",
-            oneclient_common::constants::COSMETICS_PROXY_URL
-        ));
+    if state.settings.read().cosmetics_unlock {
+        if cosmetics_proxy_reachable().await {
+            let target = oneclient_common::constants::COSMETICS_PROXY_URL;
+            custom_args.push_str(&format!(" -Dpolyplus.apiUrl={target}"));
+            tracing::info!("cosmetics unlock: pointing Poly+ at {target}");
+        } else {
+            tracing::warn!(
+                "cosmetics unlock: enabled but the local proxy is not serving; \
+                 launching against the real backend"
+            );
+        }
     }
     let loader_version_id = loader_version.as_ref().map(|lv| lv.id.as_str());
 

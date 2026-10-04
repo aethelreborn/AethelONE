@@ -23,6 +23,12 @@ pub const PLUS_BACKEND_URL: &str = "https://plus.polyfrost.org";
 /// `-Dpolyplus.apiUrl` points the game at.
 pub const COSMETICS_PROXY_PORT: u16 = 8777;
 pub const COSMETICS_PROXY_URL: &str = "http://127.0.0.1:8777";
+/// Probed before injection so a foreign process squatting on the port is never
+/// mistaken for the proxy.
+pub const COSMETICS_PROXY_PROBE: &str = "/__oneclient_proxy";
+/// Header (and value) the proxy stamps on locally-answered responses.
+pub const COSMETICS_PROXY_MARKER: &str = "x-oneclient-cosmetics";
+pub const COSMETICS_PROXY_MARKER_VALUE: &str = "aethelone";
 
 pub const SENTRY_DSN: &str = match option_env!("ONECLIENT_SENTRY_DSN") {
     Some(dsn) => dsn,

@@ -201,6 +201,10 @@ fn json_response(status: StatusCode, value: &Value) -> Response<Full<Bytes>> {
     Response::builder()
         .status(status)
         .header("content-type", "application/json")
+        .header(
+            oneclient_common::constants::COSMETICS_PROXY_MARKER,
+            oneclient_common::constants::COSMETICS_PROXY_MARKER_VALUE,
+        )
         .body(Full::new(body))
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b"{}"))))
 }
@@ -325,6 +329,11 @@ async fn handle_player_get(request: &Request<Incoming>) -> Response<Full<Bytes>>
     };
     let (cosmetics, emotes) = split_catalog(&catalog);
     let equipped = STATE.equipped.read().unwrap().clone();
+    info!(
+        groups = cosmetics.len(),
+        emotes = emotes.len(),
+        "cosmetics proxy: served the local player locker (every item owned)"
+    );
     json_response(
         StatusCode::OK,
         &json!({
@@ -362,6 +371,10 @@ async fn handle_player_put(request: Request<Incoming>) -> Response<Full<Bytes>> 
     }
     STATE.persist();
     let equipped = STATE.equipped.read().unwrap().clone();
+    info!(
+        slots = equipped.len(),
+        "cosmetics proxy: equipment change stored locally"
+    );
     json_response(
         StatusCode::OK,
         &json!({ "equipped": Value::Object(equipped.into_iter().collect()) }),
@@ -494,8 +507,14 @@ async fn ws_session(
         }
     }
     match upstream {
-        Some(websocket) => relay_session(client, websocket).await,
-        None => echo_session(client).await,
+        Some(websocket) => {
+            info!("cosmetics proxy: relaying game websocket to the official backend");
+            relay_session(client, websocket).await
+        }
+        None => {
+            info!("cosmetics proxy: game websocket answered locally");
+            echo_session(client).await
+        }
     }
 }
 
@@ -802,7 +821,14 @@ async fn handle(
     } else {
         let method = request.method().clone();
         let path = request.uri().path().to_string();
-        if method == Method::GET && path == "/cosmetics/player" {
+        if method == Method::GET
+            && path == oneclient_common::constants::COSMETICS_PROXY_PROBE
+        {
+            json_response(
+                StatusCode::OK,
+                &json!({ "proxy": oneclient_common::constants::COSMETICS_PROXY_MARKER_VALUE }),
+            )
+        } else if method == Method::GET && path == "/cosmetics/player" {
             handle_player_get(&request).await
         } else if method == Method::PUT && path == "/cosmetics/player" {
             handle_player_put(request).await

@@ -533,6 +533,18 @@ jobs:
           if [ -e "${deb_matches[0]:-}" ]; then
             deb_unique="OneClient_${VERSION}_${OS_KEY}_${ARCH}.deb"
             cp "${deb_matches[0]}" "$OUT_DIR/$deb_unique"
+
+            # The 2.8.0 rebuild derived the package name `aethel-one` from the
+            # rebranded product name while 2.7.x installed as `one-client`; the two
+            # share /usr/bin/oneclient_app, so declare the rename in the control
+            # file. dpkg/apt then swaps the old package out instead of refusing
+            # to overwrite its files. cargo-packager cannot emit these fields, so
+            # inject them before the package is signed.
+            ctrl="$(mktemp -d)"
+            dpkg-deb -R "$OUT_DIR/$deb_unique" "$ctrl"
+            printf 'Conflicts: aethel-one\nReplaces: aethel-one\n' >> "$ctrl/DEBIAN/control"
+            dpkg-deb --root-owner-group -b "$ctrl" "$OUT_DIR/$deb_unique"
+            rm -rf "$ctrl"
           fi
 
           # Same treatment for the .rpm (cargo-generate-rpm names it

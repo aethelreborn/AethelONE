@@ -161,6 +161,9 @@ SectionEnd
 
 [package.metadata.packager.deb]
 desktop-template = "distribution/linux/org.polyfrost.oneclient.template"
+# Keep the Debian package name stable across the rebrand: 2.7.x installed as
+# `one-client` and the derived `aethel-one` collides on every shared file.
+package-name = "one-client"
 
 [package.metadata.packager.appimage]
 # desktop entry generated from the deb template above via the linux config

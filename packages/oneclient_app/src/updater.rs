@@ -61,6 +61,25 @@ fn update_prompt(version: &str) -> Prompt<UpdateAnswer> {
 
 const PROGRESS_STEP: u64 = 256 * 1024;
 
+/// GitHub's asset CDN answers the occasional 401/403 while a release settles;
+/// re-attempting a download a couple of times turns those into no-ops instead
+/// of a failed update. Runs on blocking task threads, so sleeping is fine.
+fn retry<T>(what: &str, mut attempt: impl FnMut() -> anyhow::Result<T>) -> anyhow::Result<T> {
+    const ATTEMPTS: u32 = 3;
+    let mut last = None;
+    for n in 1..=ATTEMPTS {
+        match attempt() {
+            Ok(value) => return Ok(value),
+            Err(err) if n < ATTEMPTS => {
+                tracing::warn!("{what} failed (attempt {n}/{ATTEMPTS}): {err:#}; retrying");
+                std::thread::sleep(std::time::Duration::from_secs(u64::from(n)));
+            }
+            Err(err) => last = Some(err),
+        }
+    }
+    Err(last.expect("the final attempt always reports an error"))
+}
+
 pub fn spawn_update_check(auto_install: bool, events: EventBus) {
     tokio::spawn(async move {
         if let Err(err) = run_check(auto_install, events).await {
@@ -231,28 +250,31 @@ async fn download_and_install(update: Update, events: EventBus) -> anyhow::Resul
     events.progress(progress_id, &label, 0, 0);
 
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let downloaded = Cell::new(0u64);
-        let last_sent = Cell::new(0u64);
+        let bytes = retry("update download", || -> anyhow::Result<Vec<u8>> {
+            let downloaded = Cell::new(0u64);
+            let last_sent = Cell::new(0u64);
 
-        let bytes = update.download_extended(
-            |chunk, total| {
-                let now = downloaded.get() + chunk as u64;
-                downloaded.set(now);
-                let total = total.unwrap_or(0);
+            let bytes = update.download_extended(
+                |chunk, total| {
+                    let now = downloaded.get() + chunk as u64;
+                    downloaded.set(now);
+                    let total = total.unwrap_or(0);
 
-                if now == chunk as u64
-                    || (total > 0 && now >= total)
-                    || now - last_sent.get() >= PROGRESS_STEP
-                {
-                    last_sent.set(now);
-                    events.progress(progress_id, &label, now, total);
-                }
-            },
-            || {},
-        )?;
+                    if now == chunk as u64
+                        || (total > 0 && now >= total)
+                        || now - last_sent.get() >= PROGRESS_STEP
+                    {
+                        last_sent.set(now);
+                        events.progress(progress_id, &label, now, total);
+                    }
+                },
+                || {},
+            )?;
 
-        let total = downloaded.get().max(1);
-        events.progress(progress_id, &label, total, total);
+            let total = downloaded.get().max(1);
+            events.progress(progress_id, &label, total, total);
+            Ok(bytes)
+        })?;
 
         update.install(bytes)?;
 
@@ -364,7 +386,11 @@ fn notify_package_failure(
 /// Fetches the minisign `.sig` release asset that accompanies the package.
 #[cfg(target_os = "linux")]
 fn fetch_signature(url: &str) -> anyhow::Result<String> {
-    let response = reqwest::blocking::Client::new()
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .with_context(|| format!("signature client for {url}"))?;
+    let response = client
         .get(url)
         .send()
         .with_context(|| format!("failed to fetch {url}"))?
@@ -390,30 +416,33 @@ fn download_package(
     download.download_url = url
         .parse()
         .with_context(|| format!("invalid update url {url}"))?;
-    download.signature = fetch_signature(sig_url)?;
+    download.signature = retry("signature fetch", || fetch_signature(sig_url))?;
 
-    let downloaded = Cell::new(0u64);
-    let last_sent = Cell::new(0u64);
+    let bytes = retry("package download", || -> anyhow::Result<Vec<u8>> {
+        let downloaded = Cell::new(0u64);
+        let last_sent = Cell::new(0u64);
 
-    let bytes = download.download_extended(
-        |chunk, total| {
-            let now = downloaded.get() + chunk as u64;
-            downloaded.set(now);
-            let total = total.unwrap_or(0);
+        let bytes = download.download_extended(
+            |chunk, total| {
+                let now = downloaded.get() + chunk as u64;
+                downloaded.set(now);
+                let total = total.unwrap_or(0);
 
-            if now == chunk as u64
-                || (total > 0 && now >= total)
-                || now - last_sent.get() >= PROGRESS_STEP
-            {
-                last_sent.set(now);
-                events.progress(progress_id, label, now, total);
-            }
-        },
-        || {},
-    )?;
+                if now == chunk as u64
+                    || (total > 0 && now >= total)
+                    || now - last_sent.get() >= PROGRESS_STEP
+                {
+                    last_sent.set(now);
+                    events.progress(progress_id, label, now, total);
+                }
+            },
+            || {},
+        )?;
 
-    let total = downloaded.get().max(1);
-    events.progress(progress_id, label, total, total);
+        let total = downloaded.get().max(1);
+        events.progress(progress_id, label, total, total);
+        Ok(bytes)
+    })?;
     Ok(bytes)
 }
 
