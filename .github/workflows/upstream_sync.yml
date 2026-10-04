@@ -82,7 +82,7 @@ jobs:
               echo "Resolve locally with \`git fetch upstream && git merge upstream/main\`, then push."
             } > conflict-issue.md
             git merge --abort || true
-            gh issue create --title "Upstream sync conflict" --body-file conflict-issue.md || true
+            gh issue create --repo "${GITHUB_REPOSITORY}" --title "Upstream sync conflict" --body-file conflict-issue.md || true
             exit 1
           fi
 
@@ -110,7 +110,9 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run oneclient_nightly.yml
+        # --repo: never trust gh's git-remote fallback here - this job also adds
+        # the Polyfrost remote, and a dispatch against upstream is a hard 403.
+        run: gh workflow run oneclient_nightly.yml --repo "${GITHUB_REPOSITORY}"
 
       - name: Cut and publish a release when there is something to release
         if: github.event_name == 'schedule' || inputs.release
@@ -128,13 +130,16 @@ jobs:
             exit 0
           fi
 
-          gh workflow run oneclient_release.yml
+          # Every gh call below is pinned to this repository: gh's git-remote
+          # detection in this job can resolve to the upstream remote instead of
+          # the fork, and a dispatch against Polyfrost/OneLauncher is a 403.
+          gh workflow run oneclient_release.yml --repo "${GITHUB_REPOSITORY}"
           sleep 30
-          run_id="$(gh run list --workflow oneclient_release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+          run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow oneclient_release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
           echo "Watching release run $run_id"
           # --exit-status fails the sync run when the release fails, so the next
           # schedule retries (the release workflow reuses its draft).
-          gh run watch "$run_id" --exit-status --interval 30 > /dev/null
+          gh run watch "$run_id" --repo "${GITHUB_REPOSITORY}" --exit-status --interval 30 > /dev/null
 
           # The release workflow ships a draft for a human to publish; this fork
           # publishes it once every leg is green. The draft targets the version
@@ -143,12 +148,12 @@ jobs:
           git fetch --no-tags origin main
           shipped="$(git show origin/main:Cargo.toml | sed -n -E '/^\[workspace\.package\]/,/^\[/ s/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -n1)"
           tag="oneclient-$shipped"
-          if [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = "true" ]; then
+          if [ "$(gh release view "$tag" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)" = "true" ]; then
             echo "Publishing $tag"
-            gh release edit "$tag" --draft=false
+            gh release edit "$tag" --repo "${GITHUB_REPOSITORY}" --draft=false
           fi
 
           # release: published will not spawn changelog_publish (GITHUB_TOKEN
           # recursion guard), so refresh changelog.json explicitly.
-          gh workflow run changelog_publish.yml
+          gh workflow run changelog_publish.yml --repo "${GITHUB_REPOSITORY}"
 
