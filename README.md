@@ -1,39 +1,40 @@
-<div align="center">
+# AethelONE
 
-<img src=".github/media/RepoBanner.png" alt="Repository Banner" />
+**AethelONE is a fork of [Polyfrost's OneClient / OneLauncher](https://github.com/Polyfrost/OneLauncher)** — an open source
+Minecraft client and launcher — with the official Microsoft-account requirement removed and its own self-hosted
+release channel.
 
-# OneClient  |  OneLauncher
-The monorepo containing the code for OneLauncher, OneClient, and their core backend.
+## What this fork changes
 
-OneClient is a Minecraft client featuring fully 100% open-source components, offering many packaged and pre-configured mods in one click.
-OneLauncher is a WIP Minecraft launcher giving power-users the greatest customization whilst featuring a clean UI.
-
-</div>
+- **Offline (cracked) accounts everywhere.** Adding, defaulting and launching offline accounts works from the
+  onboarding flow, settings, and the launch path — no Microsoft sign-in is required anywhere.
+- **Self-hosted auto-updates.** Releases are built and published from
+  [aethelreborn/AethelONE](https://github.com/aethelreborn/AethelONE); the app updates itself from them.
+  Linux deb/rpm packages and the AppImage verify a minisign signature (public key pinned in
+  `packages/oneclient_app/src/constants.rs`); Windows and macOS builds update through the release manifest.
+- **Automatic upstream sync.** Polyfrost's upstream is merged every 6 hours by CI. Only `Cargo.lock` conflicts are
+  resolved automatically; anything else stops with a GitHub issue instead of being guessed at.
 
 ## Installing
 
-You can install the latest release of OneClient from our website: [https://polyfrost.org/projects/oneclient](https://polyfrost.org/projects/oneclient)
-as well as our [GitHub releases](https://github.com/Polyfrost/OneLauncher/releases/latest).
+Download the latest release from [AethelONE releases](https://github.com/aethelreborn/AethelONE/releases/latest):
 
-| Windows (x86_64) | macOS (Intel & Apple Silicon) | Linux (x86_64)                                          |
-|------------------|-------------------------------|---------------------------------------------------------|
-| Installer 🔄      | DMG 🔄                        | AppImage 🔄                                             |
-|                  | App Bundle 🔄                 | DEB                                                     |
-|                  |                               | RPM                                                     |
-|                  |                               | [AUR](https://aur.archlinux.org/packages/oneclient-bin) |
+| Windows (x86_64) | macOS (Intel & Apple Silicon) | Linux (x86_64) |
+|------------------|-------------------------------|----------------|
+| Installer 🔄      | DMG 🔄                        | AppImage 🔄     |
+|                  | App Bundle 🔄                 | DEB 🔄          |
+|                  |                               | RPM 🔄          |
 
-> 🔄 = Has support for autoupdating built-in
-
+> 🔄 = self-updating: the app checks the AethelONE release channel for new versions.
 
 ## Contributing
 
-We welcome contributions! Please read our [contributing guidelines](CONTRIBUTING.md) before getting started.
-
+PRs against this fork are welcome — please read the [contributing guidelines](CONTRIBUTING.md).
+Contributions that belong upstream should go to [Polyfrost/OneLauncher](https://github.com/Polyfrost/OneLauncher).
 
 ### Requirements
 
 The project targets **Rust 1.97** or later. You can install Rust via [rustup](https://rustup.rs/).
-
 
 ### Building & Running
 
@@ -45,6 +46,7 @@ cargo run -p oneclient_app
 cargo build -p oneclient_app --release
 ```
 
+Debug builds never self-update.
 
 ### Packaging / Releasing
 
@@ -59,9 +61,12 @@ cargo install cargo-packager --locked
 # Build the binary, then bundle it for the current OS:
 cargo build --release -p oneclient_app
 cargo packager --release -p oneclient_app --formats <targets>
-#   Windows: nsis      macOS: app,dmg      Linux: deb,appimage
+#   Windows: nsis      macOS: app,dmg      Linux: deb,rpm,appimage
 ```
 
+Releases are cut by the **AethelONE Release Build** workflow: add a change file, push, and CI bumps the version,
+builds every platform leg, signs the Linux packages, publishes the draft release, and refreshes
+`latest.json` / `changelog.json` for the in-app updater.
 
 ### Versioning
 
@@ -69,10 +74,18 @@ The workspace shares a single version, defined in the root [`Cargo.toml`](./Carg
 
 Versions and release notes come from [Knope](https://knope.tech) change files in [`.changeset/`](./.changeset).
 Add one per user-facing change with `knope document-change` (installed via `cargo install knope`). The
-`OneClient Release Build` workflow consumes them, bumps the version, writes [`CHANGELOG.md`](./CHANGELOG.md),
+`AethelONE Release Build` workflow consumes them, bumps the version, writes [`CHANGELOG.md`](./CHANGELOG.md),
 and uses the new entry as the GitHub release body, which is what the launcher's changelog page shows.
-
 
 ## Code signing
 
-This program uses free code signing provided by [SignPath.io](https://signpath.io?utm_source=foundation&utm_medium=github&utm_campaign=0install), and a certificate by the [SignPath Foundation](https://signpath.org?utm_source=foundation&utm_medium=github&utm_campaign=0install). We thank them very much to their contributions to OSS software!
+Linux packages ship with a minisign signature generated in CI from the updater key
+(`CARGO_PACKAGER_SIGN_PRIVATE_KEY` secret); the public key is compiled into the app. Windows/macOS installer
+signing is optional and stays disabled unless the repository is configured with Apple and SignPath secrets.
+
+## Credits & license
+
+- Fork of [Polyfrost/OneLauncher](https://github.com/Polyfrost/OneLauncher), licensed under
+  [GPL-3.0](./LICENSE). Credit and copyright for the original work belong to Polyfrost and its contributors.
+- Not affiliated with Polyfrost, Mojang, or Microsoft.
+- You are expected to own a legitimate copy of Minecraft.

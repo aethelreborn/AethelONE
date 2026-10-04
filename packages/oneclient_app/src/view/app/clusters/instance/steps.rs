@@ -58,10 +58,10 @@ fn type_step(mut wizard: Wizard, picks: &Picks) -> Element {
         (
             TypeChoice::OneClient,
             IconType::IconLogo,
-            "OneClient",
+            "AethelONE",
             Some("Recommended"),
             "The most bleeding edge performance, QoL mods and world hosting in one instance.",
-            "Shares configs, worlds, and packs with your other OneClient instances.",
+            "Shares configs, worlds, and packs with your other AethelONE instances.",
         ),
         (
             TypeChoice::Scratch,

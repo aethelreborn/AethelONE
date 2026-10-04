@@ -68,7 +68,7 @@ pub async fn resolve(picked: &Path) -> PathBuf {
 pub fn default_path() -> Result<PathBuf, String> {
     paths::config_dir()
         .map(Path::to_path_buf)
-        .map_err(|err| format!("Couldn't work out where OneClient keeps its settings: {err}"))
+        .map_err(|err| format!("Couldn't work out where AethelONE keeps its settings: {err}"))
 }
 
 #[must_use]

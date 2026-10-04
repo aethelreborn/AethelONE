@@ -1,4 +1,4 @@
-name: OneClient Release Build
+name: AethelONE Release Build
 
 
 on:
@@ -68,14 +68,14 @@ jobs:
             exit 1
           fi
           TAG="oneclient-$VERSION"
-          echo "Releasing OneClient $VERSION"
+          echo "Releasing AethelONE $VERSION"
 
           # Abort rather than clobber: a published release (or an existing tag,
           # which only appears once a release is published) means this version
           # already shipped. A *draft* is a previous failed/partial run of this
           # same workflow, so reuse it.
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "::error::Tag $TAG already exists on origin - OneClient $VERSION has already been released. Add a change file with \`knope document-change\` first."
+            echo "::error::Tag $TAG already exists on origin - AethelONE $VERSION has already been released. Add a change file with \`knope document-change\` first."
             exit 1
           fi
 
@@ -85,7 +85,7 @@ jobs:
             RELEASE_EXISTS=1
           fi
           if [ "$RELEASE_EXISTS" = "1" ] && [ "$IS_DRAFT" != "true" ]; then
-            echo "::error::Release $TAG already exists and is published - refusing to overwrite OneClient $VERSION. Add a change file with \`knope document-change\` first."
+            echo "::error::Release $TAG already exists and is published - refusing to overwrite AethelONE $VERSION. Add a change file with \`knope document-change\` first."
             exit 1
           fi
 
@@ -115,7 +115,7 @@ jobs:
             gh release create "$TAG" \
               --draft \
               --target "$SHA" \
-              --title "OneClient $VERSION" \
+              --title "AethelONE $VERSION" \
               --notes-file notes.md
           fi
 

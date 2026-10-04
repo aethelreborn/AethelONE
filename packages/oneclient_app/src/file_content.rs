@@ -43,7 +43,7 @@ pub fn desktop_entry(name: &str, exe: &Path, folder: &str, icon: &str) -> String
          Type=Application\n\
          Version=1.0\n\
          Name={name}\n\
-         Comment=Launch {name} with OneClient\n\
+         Comment=Launch {name} with AethelONE\n\
          Exec={exec}\n\
          Icon={icon}\n\
          Terminal=false\n\
@@ -58,7 +58,7 @@ pub fn url_handler_entry(exe: &Path, scheme: &str, icon: &str) -> String {
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
-         Name=OneClient\n\
+         Name=AethelONE\n\
          Exec={exec} %u\n\
          Icon={icon}\n\
          Terminal=false\n\
@@ -212,8 +212,8 @@ mod tests {
 
     #[test]
     fn the_mac_wrapper_survives_a_quote_in_the_path() {
-        let script = shell_script(&PathBuf::from("/Users/o'brien/OneClient"), "pack");
-        assert!(script.contains(r"'/Users/o'\''brien/OneClient'"));
+        let script = shell_script(&PathBuf::from("/Users/o'brien/AethelONE"), "pack");
+        assert!(script.contains(r"'/Users/o'\''brien/AethelONE'"));
         assert!(script.starts_with("#!/bin/sh\n"));
     }
 
@@ -240,12 +240,12 @@ mod tests {
     fn the_url_shortcut_is_a_single_ini_section() {
         let file = url_shortcut(
             "oneclient://launch/My%20Pack",
-            &PathBuf::from(r"C:\Program Files\OneClient\oneclient_app.exe"),
+            &PathBuf::from(r"C:\Program Files\AethelONE\oneclient_app.exe"),
         );
 
         assert!(file.starts_with("[InternetShortcut]\r\n"));
         assert!(file.contains("\r\nURL=oneclient://launch/My%20Pack\r\n"));
-        assert!(file.contains(r"IconFile=C:\Program Files\OneClient\oneclient_app.exe"));
+        assert!(file.contains(r"IconFile=C:\Program Files\AethelONE\oneclient_app.exe"));
         assert!(file.ends_with("IconIndex=0\r\n"));
     }
 }

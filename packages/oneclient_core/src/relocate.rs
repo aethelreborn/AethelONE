@@ -126,7 +126,7 @@ async fn weigh(
 
     if let Some(old) = leftovers(state).await {
         return Err(format!(
-            "Clear the {} still sitting in {} first. OneClient keeps track of one old folder at a time.",
+            "Clear the {} still sitting in {} first. AethelONE keeps track of one old folder at a time.",
             format_bytes(old.bytes),
             old.path.display()
         ));
@@ -408,7 +408,7 @@ pub fn restart_pending(state: &LauncherState, current: &Path) -> Option<String> 
 
     (settled != current).then(|| {
         format!(
-            "A move to {} is already waiting. Restart OneClient to finish it.",
+            "A move to {} is already waiting. Restart AethelONE to finish it.",
             settled.display()
         )
     })

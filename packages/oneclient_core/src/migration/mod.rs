@@ -27,7 +27,7 @@ impl MigrationSource {
 
     pub fn display_name(self) -> &'static str {
         match self {
-            MigrationSource::OneClientV1 => "OneClient",
+            MigrationSource::OneClientV1 => "AethelONE",
             MigrationSource::Vanilla => "Minecraft",
         }
     }

@@ -69,7 +69,7 @@ pub async fn delete_artifact_if_unused(pool: &SqlitePool, hash: &str) -> Result<
 
 use crate::models::GlobalArtifactRow;
 
-/// One row per hash across the OneClient clusters for content that is installed globally
+/// One row per hash across the AethelONE clusters for content that is installed globally
 ///
 /// `enabled` is the OR over the clusters: one cluster still having a pack on is
 /// enough to keep it in the folder, because there is one folder and it can only

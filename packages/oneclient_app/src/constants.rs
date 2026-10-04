@@ -1,5 +1,5 @@
 pub const WINDOW_APP_ID: &str = "oneclient_app";
-pub const WINDOW_TITLE: &str = "OneClient";
+pub const WINDOW_TITLE: &str = "AethelONE";
 
 pub const UPDATER_PUBKEY: &str = "ZFc1MGNuVnpkR1ZrSUdOdmJXMWxiblE2SUcxcGJtbHphV2R1SUhCMVlteHBZeUJyWlhrNklFRkJNVFF6TVRrMFJqUkZOVFF4TlVNS1VsZFNZMUZsV0RCc1JFVlZjV3BSU2tWR1REWllhbE5LVTA1SmNrdHpkMU50TldkT2JqSjJTRWxFWWxRM2JrNTBabGhoZFc1M1FUUUs=";
 pub const UPDATER_ENDPOINT: &str =

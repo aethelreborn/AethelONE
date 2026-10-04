@@ -255,7 +255,7 @@ impl Component for Clusters {
 
         let tabs = [
             (Filter::All, "All"),
-            (Filter::OneClient, "OneClient"),
+            (Filter::OneClient, "AethelONE"),
             (Filter::Custom, "Custom"),
             (Filter::Modpacks, "Modpacks"),
         ]
@@ -366,7 +366,7 @@ impl Component for Clusters {
                                     .spacing(22.)
                                     .append_children((!shown_lines.is_empty()).then(|| {
                                         section(
-                                            "OneClient",
+                                            "AethelONE",
                                             "Grouped by Minecraft version",
                                             fixed_grid(line_cards, columns, item_height, gap),
                                         )
@@ -659,7 +659,7 @@ impl Sidebar {
             cluster_id: cluster.id,
             uses_bundles: cluster.uses_bundles(),
             art: DynamicArt::for_cluster(cluster).max_edge(ART_PREVIEW_EDGE),
-            type_label: "OneClient",
+            type_label: "AethelONE",
             title: cluster.name.clone(),
             subtitle: cluster_caption(cluster),
             description: None,
@@ -937,7 +937,7 @@ fn page_header(mut show_create: State<bool>) -> impl IntoElement {
                 )
                 .child(
                     label()
-                        .text("Pick a OneClient version, or launch one of your own instances.")
+                        .text("Pick a AethelONE version, or launch one of your own instances.")
                         .font_size(13.)
                         .color(colors::fg_secondary()),
                 ),
