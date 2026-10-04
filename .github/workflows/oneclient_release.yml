@@ -126,6 +126,12 @@ jobs:
   # ---------------------------------------------------------------------------
   package:
     needs: prepare
+    # Polyfrost-only secrets: when absent, macOS builds unsigned and Windows
+    # skips SignPath (only the minisign updater signature, computed from
+    # CARGO_PACKAGER_SIGN_*, is required to ship).
+    env:
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
     permissions:
       contents: write
       # Required so SignPath can download the uploaded build artifact.
@@ -195,7 +201,7 @@ jobs:
           version: 0.11.8
 
       - name: Import Apple Developer certificate
-        if: startsWith(matrix.platform, 'macos')
+        if: startsWith(matrix.platform, 'macos') && env.HAS_APPLE_CERT == 'true'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -261,7 +267,7 @@ jobs:
           path: target/release/oneclient_app.exe
 
       - name: (Windows) Submit SignPath signing request for app binary
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-latest' && env.HAS_SIGNPATH == 'true'
         uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e # v1.3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -274,7 +280,7 @@ jobs:
           output-artifact-directory: signed-bin
 
       - name: (Windows) Swap in signed app binary
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-latest' && env.HAS_SIGNPATH == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -287,7 +293,7 @@ jobs:
           cp "$signed" target/release/oneclient_app.exe
 
       - name: (Windows) Verify app binary is signed
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-latest' && env.HAS_SIGNPATH == 'true'
         shell: pwsh
         run: |
           $sig = Get-AuthenticodeSignature 'target/release/oneclient_app.exe'
@@ -452,7 +458,7 @@ jobs:
           path: ${{ steps.win_installer.outputs.path }}
 
       - name: (Windows) Submit SignPath signing request
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-latest' && env.HAS_SIGNPATH == 'true'
         uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e # v1.3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -465,7 +471,7 @@ jobs:
           output-artifact-directory: signed
 
       - name: (Windows) Replace installer with signed one + recompute updater sig
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-latest' && env.HAS_SIGNPATH == 'true'
         shell: bash
         env:
           CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}

@@ -1,0 +1,130 @@
+name: Upstream Sync
+
+# Keeps this fork tracking Polyfrost/OneLauncher: merge upstream/main, run the
+# fast gates, push, then notify nightly (a GITHUB_TOKEN push does not trigger
+# push: workflows) and cut a release when upstream left something to release.
+# Any conflict beyond Cargo.lock stops the run and opens an issue - nothing
+# auto-resolved ever reaches main.
+
+on:
+  schedule:
+    - cron: '43 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Cut a release when there is something to release
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: write
+  actions: write
+  issues: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/Polyfrost/OneLauncher.git
+          # --no-tags: upstream's oneclient-* tags must never enter this repo,
+          # or the release guard would refuse to cut its first fork version.
+          git fetch --no-tags upstream main
+
+      - name: Detect new upstream commits
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already up to date with Polyfrost/OneLauncher main."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "New upstream commits: $(git rev-list --count HEAD..upstream/main)"
+          fi
+
+      - name: Merge upstream/main
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          if git merge --no-edit upstream/main; then
+            exit 0
+          fi
+          conflicts="$(git diff --name-only --diff-filter=U)"
+          echo "Merge conflicts:"
+          printf -- '- %s\n' $conflicts
+          if [ "$conflicts" = "Cargo.lock" ]; then
+            # Mechanical lockfile drift: take upstream's lock; cargo re-resolves
+            # our extra direct dependencies during the validation step below and
+            # the refreshed lock is committed just before the push.
+            echo "Resolving Cargo.lock from upstream's side."
+            git checkout --theirs Cargo.lock
+            git add Cargo.lock
+            git commit --no-edit
+          else
+            {
+              echo "Automatic sync with \`upstream/main\` hit conflicts that need a human:"
+              echo
+              printf -- '- \`%s\`\n' $conflicts
+              echo
+              echo "Resolve locally with \`git fetch upstream && git merge upstream/main\`, then push."
+            } > conflict-issue.md
+            git merge --abort || true
+            gh issue create --title "Upstream sync conflict" --body-file conflict-issue.md || true
+            exit 1
+          fi
+
+      - name: Set up Rust
+        if: steps.check.outputs.changed == 'true'
+        uses: ./.github/actions/setup-rust
+        with:
+          restore-cache: false
+
+      - name: Validate the merged tree
+        if: steps.check.outputs.changed == 'true'
+        run: cargo test -p oneclient_auth
+
+      - name: Commit any lockfile refresh and push
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git add Cargo.lock
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: refresh Cargo.lock after upstream merge"
+          fi
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Dispatch nightly build
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run oneclient_nightly.yml
+
+      - name: Cut a release when there is something to release
+        if: github.event_name == 'schedule' || inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n -E '/^\[workspace\.package\]/,/^\[/ s/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' Cargo.toml | head -n1)"
+          if compgen -G ".changeset/*.md" > /dev/null; then
+            echo "Changesets pending - releasing will cut a new version."
+            gh workflow run oneclient_release.yml
+          elif ! git ls-remote --exit-code --tags origin "refs/tags/oneclient-$version" >/dev/null 2>&1; then
+            echo "Version $version has not been released on this repo yet."
+            gh workflow run oneclient_release.yml
+          else
+            echo "oneclient-$version already released and no changesets - nothing to release."
+          fi
