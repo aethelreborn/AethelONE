@@ -1,7 +1,7 @@
 pub const WINDOW_APP_ID: &str = "oneclient_app";
 pub const WINDOW_TITLE: &str = "OneClient";
 
-pub const UPDATER_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGODk3MkMyMjg0MjFDMDUKUldRRkhFSW93bktKSHpkWjNEMXNzaDVINVpCTU8xSnhuK2RnV0dTZ2FkcFJWbG1zUkhGYTNjaUkK";
+pub const UPDATER_PUBKEY: &str = "ZFc1MGNuVnpkR1ZrSUdOdmJXMWxiblE2SUcxcGJtbHphV2R1SUhCMVlteHBZeUJyWlhrNklFRkJNVFF6TVRrMFJqUkZOVFF4TlVNS1VsZFNZMUZsV0RCc1JFVlZjV3BSU2tWR1REWllhbE5LVTA1SmNrdHpkMU50TldkT2JqSjJTRWxFWWxRM2JrNTBabGhoZFc1M1FUUUs=";
 pub const UPDATER_ENDPOINT: &str =
     "https://github.com/aethelreborn/AethelONE/releases/latest/download/latest.json";
 pub const RELEASES_URL: &str = "https://github.com/aethelreborn/AethelONE/releases/latest";
