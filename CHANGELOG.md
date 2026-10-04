@@ -1,3 +1,9 @@
+## 2.8.1 (2026-10-04)
+
+### Fixes
+
+- Fix the 2.8.0 release feedback: Debian upgrade collision, updater 401/403 retries, cosmetics-unlock diagnostics
+
 ## 2.8.0 (2026-10-04)
 
 ### Features
