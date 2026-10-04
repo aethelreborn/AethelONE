@@ -83,6 +83,26 @@ Linux packages ship with a minisign signature generated in CI from the updater k
 (`CARGO_PACKAGER_SIGN_PRIVATE_KEY` secret); the public key is compiled into the app. Windows/macOS installer
 signing is optional and stays disabled unless the repository is configured with Apple and SignPath secrets.
 
+## Local cosmetics unlock
+
+All Poly+ cosmetics (capes, wings, pets, emotes) can read as owned **on this machine only**:
+
+```sh
+python3 tools/polyplus_cosmetics_proxy.py
+```
+
+Then add to each cluster's **JVM Arguments** (cluster settings):
+
+```
+-Dpolyplus.apiUrl=http://127.0.0.1:8777
+```
+
+The proxy relays every Poly+ call to the real backend unchanged and only answers
+`/cosmetics/player` locally, so your locker shows the full catalog and equipment
+choices persist under `~/.aethelone/`. Nothing is uploaded or shared — other
+players still see the official ownership state. The proxy must be running while
+the game launches with the flag.
+
 ## Credits & license
 
 - Fork of [Polyfrost/OneLauncher](https://github.com/Polyfrost/OneLauncher), licensed under
