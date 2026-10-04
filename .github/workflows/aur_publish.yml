@@ -11,6 +11,8 @@ on:
 
 jobs:
   resolve:
+    # AUR/COPR coordinates belong to upstream Polyfrost; never publish a fork build there.
+    if: github.repository == 'Polyfrost/OneLauncher'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.parse.outputs.version }}
@@ -27,6 +29,8 @@ jobs:
           fi
 
   publish-source:
+    # AUR/COPR coordinates belong to upstream Polyfrost; never publish a fork build there.
+    if: github.repository == 'Polyfrost/OneLauncher'
     needs: resolve
     runs-on: ubuntu-latest
     steps:
@@ -62,6 +66,8 @@ jobs:
           commit_message: "oneclient ${{ needs.resolve.outputs.version }}-1"
 
   publish-bin:
+    # AUR/COPR coordinates belong to upstream Polyfrost; never publish a fork build there.
+    if: github.repository == 'Polyfrost/OneLauncher'
     needs: resolve
     runs-on: ubuntu-latest
     steps:
