@@ -4,3 +4,6 @@
 OneLauncher.iml
 
 /packages/oneclient_app/icons/generated/
+
+# Local secrets - never commit
+.env.local
