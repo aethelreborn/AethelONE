@@ -112,7 +112,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run oneclient_nightly.yml
 
-      - name: Cut a release when there is something to release
+      - name: Cut and publish a release when there is something to release
         if: github.event_name == 'schedule' || inputs.release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -121,10 +121,33 @@ jobs:
           version="$(sed -n -E '/^\[workspace\.package\]/,/^\[/ s/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' Cargo.toml | head -n1)"
           if compgen -G ".changeset/*.md" > /dev/null; then
             echo "Changesets pending - releasing will cut a new version."
-            gh workflow run oneclient_release.yml
           elif ! git ls-remote --exit-code --tags origin "refs/tags/oneclient-$version" >/dev/null 2>&1; then
             echo "Version $version has not been released on this repo yet."
-            gh workflow run oneclient_release.yml
           else
             echo "oneclient-$version already released and no changesets - nothing to release."
+            exit 0
           fi
+
+          gh workflow run oneclient_release.yml
+          sleep 30
+          run_id="$(gh run list --workflow oneclient_release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+          echo "Watching release run $run_id"
+          # --exit-status fails the sync run when the release fails, so the next
+          # schedule retries (the release workflow reuses its draft).
+          gh run watch "$run_id" --exit-status --interval 30 > /dev/null
+
+          # The release workflow ships a draft for a human to publish; this fork
+          # publishes it once every leg is green.
+          head_sha="$(gh run view "$run_id" --json headSha --jq .headSha)"
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.draft) | select(.target_commitish == \"$head_sha\") | .tag_name" \
+            | while read -r tag; do
+                [ -n "$tag" ] || continue
+                echo "Publishing $tag"
+                gh release edit "$tag" --draft=false
+              done
+
+          # release: published will not spawn changelog_publish (GITHUB_TOKEN
+          # recursion guard), so refresh changelog.json explicitly.
+          gh workflow run changelog_publish.yml
+
