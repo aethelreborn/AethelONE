@@ -1,3 +1,11 @@
+## 2.8.0 (2026-10-04)
+
+### Features
+
+- The app is now branded AethelONE: window and tray titles, onboarding, settings copy, update notifications, Discord presence, and installer product name
+
+- AethelONE
+
 ## 2.7.0 (2026-10-04)
 
 ### Features
