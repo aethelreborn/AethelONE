@@ -4936,6 +4936,7 @@ dependencies = [
  "image",
  "libloading 0.8.9",
  "mimalloc",
+ "minisign-verify",
  "notify",
  "oneclient_auth",
  "oneclient_cluster",

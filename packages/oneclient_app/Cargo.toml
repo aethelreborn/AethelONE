@@ -73,6 +73,7 @@ pulldown-cmark.workspace = true
 
 [dev-dependencies]
 freya-testing.workspace = true
+minisign-verify = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 mimalloc = "=0.1.52"
