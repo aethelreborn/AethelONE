@@ -8,13 +8,17 @@
 //!   choices are persisted under `~/.aethelone/` (seeded once from the
 //!   account's official locker when one exists).
 //! * `PUT  /cosmetics/player` — writes that local equipment state.
+//! * `POST /account/login` — tried against the real backend first; when the
+//!   backend rejects the session (offline accounts have no Mojang session),
+//!   a local bearer token is minted so Poly+ proceeds and the locker below
+//!   can load. Real Microsoft sessions pass through untouched.
 //! * everything else — forwarded to the real backend unchanged, including the
 //!   caller's Authorization header, so logins, store and socials keep working.
 //! * `GET  /websocket` — relays to the real backend when the client presents a
 //!   working upstream token (so other players still see your official
-//!   unlocks); otherwise answers locally (pings/pongs) so the mod's equipment
-//!   sync stays healthy. Textures are never proxied: they come straight from
-//!   the public CDN.
+//!   unlocks); local-session and tokenless clients are answered locally
+//!   (pings/pongs) so the mod's equipment sync stays healthy. Textures are
+//!   never proxied: they come straight from the public CDN.
 //!
 //! Nothing is uploaded, mirrored or shared; other players always see their
 //! official ownership. The whole feature is local-only by design.
@@ -48,6 +52,10 @@ use tokio::net::TcpListener;
 use tracing::{debug, info, warn};
 
 const UPSTREAM: &str = oneclient_common::constants::PLUS_BACKEND_URL;
+/// Prefix of bearer tokens this proxy mints when the real backend rejects the
+/// session; the websocket keys off it to answer locally instead of relaying a
+/// token upstream would refuse.
+const LOCAL_TOKEN_PREFIX: &str = "oneclient-local.";
 const CATALOG_TTL: Duration = Duration::from_secs(600);
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
@@ -393,7 +401,16 @@ async fn handle_forward(request: Request<Incoming>) -> Response<Full<Bytes>> {
         Ok(collected) => collected.to_bytes(),
         Err(err) => return error_json(StatusCode::BAD_REQUEST, &format!("body: {err}")),
     };
-    match forward_request(&method, &path, &headers, body).await {
+    build_forward_response(&method, &path, &headers, body).await
+}
+
+async fn build_forward_response(
+    method: &Method,
+    path_and_query: &str,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Response<Full<Bytes>> {
+    match forward_request(method, path_and_query, headers, body).await {
         Ok(response) => {
             let status =
                 StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -412,6 +429,41 @@ async fn handle_forward(request: Request<Incoming>) -> Response<Full<Bytes>> {
         }
         Err(err) => error_json(StatusCode::BAD_GATEWAY, &err),
     }
+}
+
+/// Logins go to the real backend first; only a rejected session (offline
+/// accounts have no Mojang sessionserver proof, so plus.polyfrost.org answers
+/// 401) falls back to a locally minted token, which is enough for Poly+ to
+/// finish authorizing and load the unlocked locker.
+async fn handle_account_login(request: Request<Incoming>) -> Response<Full<Bytes>> {
+    let path_and_query = request
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str().to_string())
+        .unwrap_or_else(|| "/account/login".to_string());
+    let headers = request.headers().clone();
+    let body = match request.into_body().collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(err) => return error_json(StatusCode::BAD_REQUEST, &format!("body: {err}")),
+    };
+    let response = build_forward_response(&Method::POST, &path_and_query, &headers, body).await;
+    let status = response.status();
+    if status.is_success() {
+        return response;
+    }
+    if status != StatusCode::UNAUTHORIZED
+        && status != StatusCode::FORBIDDEN
+        && status != StatusCode::BAD_GATEWAY
+        && !status.is_server_error()
+    {
+        return response;
+    }
+    let token = format!("{LOCAL_TOKEN_PREFIX}{}", uuid::Uuid::new_v4());
+    info!(
+        status = %status,
+        "cosmetics proxy: real backend rejected the session; issuing a local token instead"
+    );
+    json_response(StatusCode::OK, &json!({ "token": token }))
 }
 
 // --------------------------------------------------------------- websocket
@@ -499,11 +551,20 @@ async fn ws_session(
     path_and_query: String,
     auth: Option<hyper::header::HeaderValue>,
 ) {
+    let local_session = auth.as_ref().is_some_and(|value| {
+        value
+            .to_str()
+            .is_ok_and(|text| text.contains(LOCAL_TOKEN_PREFIX))
+    });
     let mut upstream = None;
     if let Some(auth) = auth {
-        match upstream_ws_connect(&path_and_query, auth).await {
-            Ok(websocket) => upstream = Some(websocket),
-            Err(err) => debug!("cosmetics proxy: no upstream ws ({err}); echoing locally"),
+        if local_session {
+            debug!("cosmetics proxy: local session token; skipping the upstream ws");
+        } else {
+            match upstream_ws_connect(&path_and_query, auth).await {
+                Ok(websocket) => upstream = Some(websocket),
+                Err(err) => debug!("cosmetics proxy: no upstream ws ({err}); echoing locally"),
+            }
         }
     }
     match upstream {
@@ -832,6 +893,8 @@ async fn handle(
             handle_player_get(&request).await
         } else if method == Method::PUT && path == "/cosmetics/player" {
             handle_player_put(request).await
+        } else if method == Method::POST && path == "/account/login" {
+            handle_account_login(request).await
         } else {
             handle_forward(request).await
         }
@@ -1056,6 +1119,30 @@ mod tests {
         assert_eq!(response.status(), 200);
         let value: Value = response.json().await.unwrap();
         assert!(value.get("cosmetics").is_some());
+    }
+
+    #[tokio::test]
+    #[ignore = "talks to plus.polyfrost.org"]
+    async fn live_account_login_falls_back_to_a_local_token_when_upstream_rejects() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(run(listener));
+        // Junk credentials make the real backend answer 401 (the offline-account
+        // case); the proxy must still hand the mod a usable local token.
+        let response = reqwest::Client::new()
+            .post(format!(
+                "http://127.0.0.1:{port}/account/login?server_id=probe&username=__oneclient_probe__"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let value: Value = response.json().await.unwrap();
+        let token = value.get("token").and_then(Value::as_str).unwrap();
+        assert!(
+            token.starts_with(LOCAL_TOKEN_PREFIX),
+            "expected a local token, got {token}"
+        );
     }
 
     #[tokio::test]
