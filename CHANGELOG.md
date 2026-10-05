@@ -1,3 +1,9 @@
+## 2.8.2 (2026-10-05)
+
+### Fixes
+
+- Offline accounts can now finish Poly+ login and open the unlocked locker
+
 ## 2.8.1 (2026-10-04)
 
 ### Fixes
