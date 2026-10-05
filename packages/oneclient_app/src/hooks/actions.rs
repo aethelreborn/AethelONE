@@ -2019,6 +2019,10 @@ async fn launch(actions: &Actions, cluster_id: ClusterId) {
         return;
     }
 
+    // Same reasoning: the skin mod and the active local skin file must be in
+    // place before the game process reads them
+    crate::view::app::skins::inject::sync_before_launch(&state, cluster_id, &account).await;
+
     off_ui(async move {
         if let Err(err) = oneclient_core::launch_cluster(&state, cluster_id, &account, true).await {
             // A missing file is the one failure the launcher can fix itself and a
@@ -2071,6 +2075,10 @@ async fn repair_and_relaunch(
         .notify("Repair complete")
         .body(report.summary())
         .send();
+
+    // Repair can have replaced cluster files, so re-sync the skin before the
+    // launch that follows it
+    crate::view::app::skins::inject::sync_before_launch(state, cluster_id, account).await;
 
     if let Err(err) = oneclient_core::launch_cluster(state, cluster_id, account, true).await {
         tracing::error!(cluster_id, "launch failed again after repair: {err:#}");

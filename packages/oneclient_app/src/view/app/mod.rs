@@ -2,7 +2,7 @@ mod analytics;
 mod clusters;
 mod debug;
 mod home;
-mod skins;
+pub mod skins;
 mod stats;
 
 pub mod browser;

@@ -41,6 +41,7 @@ pub struct PlayerModel {
     height: Size,
     yaw: f32,
     pitch: f32,
+    skin: Option<(Bytes, bool)>,
 }
 
 impl PlayerModel {
@@ -51,7 +52,14 @@ impl PlayerModel {
             height: Size::fill(),
             yaw: 0.5,
             pitch: -0.1,
+            skin: None,
         }
+    }
+
+    /// Renders `bytes` (a PNG skin) instead of the profile skin of `uuid`.
+    pub fn skin(mut self, bytes: Bytes, slim: bool) -> Self {
+        self.skin = Some((bytes, slim));
+        self
     }
 
     pub fn width(mut self, width: Size) -> Self {
@@ -79,17 +87,28 @@ impl PlayerModel {
 
 impl Component for PlayerModel {
     fn render(&self) -> impl IntoElement {
-        let (skin_bytes, is_slim) = use_player_skin(self.uuid.clone());
+        let (profile_bytes, profile_slim) = use_player_skin(self.uuid.clone());
 
-        let mut cache = use_state(|| None::<(usize, Shader)>);
-        let src_ptr = skin_bytes.as_ptr() as usize;
+        let (skin_bytes, is_slim) = match &self.skin {
+            Some((bytes, slim)) => (bytes.clone(), *slim),
+            None => (profile_bytes, profile_slim),
+        };
+
+        // Overrides come and go as freshly read files that can share an
+        // address, so their shader keys on content instead of the pointer.
+        let cache_key: u64 = match &self.skin {
+            Some((bytes, _)) => fnv1a(bytes),
+            None => skin_bytes.as_ptr() as u64,
+        };
+
+        let mut cache = use_state(|| None::<(u64, Shader)>);
         let cache_copy = cache.peek().cloned();
         let skin_shader = match cache_copy {
-            Some((ptr, shader)) if ptr == src_ptr => Some(shader),
+            Some((key, shader)) if key == cache_key => Some(shader),
             _ => {
                 let shader = decode_skin_shader(&skin_bytes);
                 if let Some(shader) = &shader {
-                    cache.set(Some((src_ptr, shader.clone())));
+                    cache.set(Some((cache_key, shader.clone())));
                 }
                 shader
             }
@@ -163,7 +182,7 @@ impl Component for PlayerModel {
             .cursor(CursorIcon::Grab)
             .child(
                 canvas(render_cb)
-                    .key(src_ptr as u64)
+                    .key(cache_key)
                     .width(Size::fill())
                     .height(Size::fill()),
             )
@@ -195,6 +214,15 @@ impl Component for PlayerModel {
                 }
             })
     }
+}
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 fn decode_skin_shader(skin_bytes: &Bytes) -> Option<Shader> {
