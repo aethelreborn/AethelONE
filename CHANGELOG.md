@@ -1,3 +1,9 @@
+## 2.9.0 (2026-10-05)
+
+### Features
+
+- Offline custom skins now live in their own Skins tab
+
 ## 2.8.3 (2026-10-05)
 
 ### Fixes
