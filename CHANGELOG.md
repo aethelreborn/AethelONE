@@ -1,3 +1,9 @@
+## 2.9.1 (2026-10-05)
+
+### Fixes
+
+- The Skins tab has working SET buttons again
+
 ## 2.9.0 (2026-10-05)
 
 ### Features
