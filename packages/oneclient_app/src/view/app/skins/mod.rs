@@ -206,18 +206,21 @@ fn side_panel(
         .child(
             rect()
                 .horizontal()
+                .content(Content::Flex)
+                .cross_align(Alignment::Center)
                 .spacing(12.)
                 .child(
                     TextInput::new(url_input)
                         .placeholder("https://…/skin.png")
+                        .width(Size::flex(1.0))
                         .enabled(!is_busy),
                 )
                 .child({
                     let add_url_status = status;
                     Button::new()
-                        .variant(ButtonVariant::Secondary)
+                        .variant(ButtonVariant::Primary)
                         .disabled(is_busy)
-                        .text("Add")
+                        .text("SET")
                         .on_press(move |_| {
                             let url = url_input.read().clone();
                             add_from_url(
@@ -235,18 +238,21 @@ fn side_panel(
         .child(
             rect()
                 .horizontal()
+                .content(Content::Flex)
+                .cross_align(Alignment::Center)
                 .spacing(12.)
                 .child(
                     TextInput::new(name_input)
                         .placeholder("e.g. Notch")
+                        .width(Size::flex(1.0))
                         .enabled(!is_busy),
                 )
                 .child({
                     let add_name_status = status;
                     Button::new()
-                        .variant(ButtonVariant::Secondary)
+                        .variant(ButtonVariant::Primary)
                         .disabled(is_busy)
-                        .text("Add")
+                        .text("SET")
                         .on_press(move |_| {
                             let name = name_input.read().clone();
                             add_from_name(
@@ -342,15 +348,20 @@ fn import_button(
         .text("Import Skin")
         .on_press(move |_| {
             spawn(async move {
+                busy.set(true);
+                status.set(Some(("Opening the file picker…".to_string(), false)));
+
                 let dialog = rfd::AsyncFileDialog::new()
                     .set_title("Choose a skin PNG")
                     .add_filter("Skin image", &["png"]);
 
                 let Some(handle) = dialog.pick_file().await else {
+                    tracing::warn!("skin file dialog closed without a selection");
+                    status.set(Some(("No file chosen".to_string(), false)));
+                    busy.set(false);
                     return;
                 };
 
-                busy.set(true);
                 status.set(None);
 
                 let file_name = handle.file_name();
@@ -359,19 +370,20 @@ fn import_button(
                 match validate_skin(&bytes) {
                     Ok(slim) => {
                         let entry_name = file_display_name(&file_name);
-                        match library.write().add(
+                        let added = library.write().add(
                             entry_name,
                             file_name,
                             SkinKind::File,
                             slim,
                             &bytes,
-                        ) {
+                        );
+                        match added {
                             Ok(id) => {
+                                library.write().set_active(Some(id.clone()));
                                 selected.set(Some(id));
                                 preview.set(Some((bytes, slim)));
                                 status.set(Some((
-                                    "Skin imported — press \"Use this skin\" to equip it"
-                                        .to_string(),
+                                    "Imported and set as your active skin".to_string(),
                                     false,
                                 )));
                             }
@@ -427,15 +439,16 @@ fn add_from_url(
                     .filter(|name| !name.is_empty())
                     .unwrap_or_else(|| "URL skin".to_string());
 
-                match library
+                let added = library
                     .write()
-                    .add(display, url.trim().to_string(), SkinKind::Url, slim, &bytes)
-                {
+                    .add(display, url.trim().to_string(), SkinKind::Url, slim, &bytes);
+                match added {
                     Ok(id) => {
+                        library.write().set_active(Some(id.clone()));
                         selected.set(Some(id));
                         preview.set(Some((bytes, slim)));
                         status.set(Some((
-                            "Skin added — press \"Use this skin\" to equip it".to_string(),
+                            "Saved to your library and set as your active skin".to_string(),
                             false,
                         )));
                     }
@@ -468,20 +481,20 @@ fn add_from_name(
 
         match fetch_by_name(&name).await {
             Ok((bytes, slim, canonical)) => {
-                match library.write().add(
+                let added = library.write().add(
                     canonical.clone(),
                     name.trim().to_string(),
                     SkinKind::Name,
                     slim,
                     &bytes,
-                ) {
+                );
+                match added {
                     Ok(id) => {
+                        library.write().set_active(Some(id.clone()));
                         selected.set(Some(id));
                         preview.set(Some((bytes, slim)));
                         status.set(Some((
-                            format!(
-                                "Skin of \"{canonical}\" added — press \"Use this skin\" to equip it"
-                            ),
+                            format!("Skin of \"{canonical}\" saved and set as your active skin"),
                             false,
                         )));
                     }
