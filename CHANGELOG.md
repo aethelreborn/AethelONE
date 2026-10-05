@@ -1,3 +1,9 @@
+## 2.8.3 (2026-10-05)
+
+### Fixes
+
+- Fix automatic updates failing with "Invalid encoding in minisign data"
+
 ## 2.8.2 (2026-10-05)
 
 ### Fixes
