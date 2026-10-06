@@ -115,8 +115,19 @@ fn write_skin(
         .join("LocalSkin")
         .join("skins");
     std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-    let file_name = sanitize_username(&account.username);
+    // CustomSkinLoader resolves its local skin as "LocalSkin/skins/{USERNAME}.png"
+    let file_name = skin_file_name(&account.username);
+    // Releases before the extension fix wrote the bare username; that file is
+    // never read, so drop it
+    let legacy = dir.join(sanitize_username(&account.username));
+    if legacy.is_file() {
+        let _ = std::fs::remove_file(legacy);
+    }
     std::fs::write(dir.join(file_name), skin).map_err(|err| err.to_string())
+}
+
+fn skin_file_name(username: &str) -> String {
+    format!("{}.png", sanitize_username(username))
 }
 
 fn sanitize_username(name: &str) -> String {
@@ -344,7 +355,13 @@ fn has_csl_jar(mods_dir: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_username, version_matches};
+    use super::{sanitize_username, skin_file_name, version_matches};
+
+    #[test]
+    fn skin_file_name_is_the_username_with_png_extension() {
+        assert_eq!(skin_file_name("Darkie_Krish"), "Darkie_Krish.png");
+        assert_eq!(skin_file_name("a/b:c"), "a_b_c.png");
+    }
 
     #[test]
     fn matches_exact_and_broader_version_lines() {
