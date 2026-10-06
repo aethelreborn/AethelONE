@@ -4930,6 +4930,7 @@ dependencies = [
  "freya-skia-safe",
  "freya-testing",
  "futures-util",
+ "gtk-sys",
  "http-body-util",
  "hyper",
  "hyper-util",
