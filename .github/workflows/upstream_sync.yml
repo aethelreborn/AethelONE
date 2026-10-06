@@ -85,6 +85,8 @@ jobs:
             gh issue create --repo "${GITHUB_REPOSITORY}" --title "Upstream sync conflict" --body-file conflict-issue.md || true
             exit 1
           fi
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Set up Rust
         if: steps.check.outputs.changed == 'true'
