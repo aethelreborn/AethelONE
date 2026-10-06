@@ -323,7 +323,7 @@ fn side_panel(
         )
         .child(
             label()
-                .text("The active skin installs CustomSkinLoader into your versions automatically when you launch. Custom skins apply to offline accounts on 1.8 – 26.2.")
+                .text("The active skin installs CustomSkinLoader into your versions automatically when you launch. Custom skins apply to offline accounts on 1.8 – 26.3.")
                 .font_size(12.)
                 .color(colors::fg_secondary()),
         )

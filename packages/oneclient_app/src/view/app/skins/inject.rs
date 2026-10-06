@@ -7,8 +7,15 @@ use serde_json::Value;
 use super::library::Library;
 
 const CSL_API: &str = "https://api.modrinth.com/v2/project/customskinloader/version";
+// Modrinth lags behind upstream releases (15.1 fixing the startup NPE is
+// GitHub-only), so the latest GitHub release is the primary source
+const CSL_GITHUB_LATEST: &str =
+    "https://api.github.com/repos/xfl03/MCCustomSkinLoader/releases/latest";
 const CSL_PREFIX: &str = "CustomSkinLoader_Universal-";
 const CSL_CACHE_SUBDIR: &str = "skins/csl";
+/// 15.0.1 is tagged for 26.x on Modrinth but crashes Fabric on startup with a
+/// known mixin conflict (upstream fixed it in 15.1) — never fall back to it
+const CSL_KNOWN_BAD: &[&str] = &["CustomSkinLoader_Universal-15.0.1.jar"];
 
 /// Keeps CustomSkinLoader and the active local skin in sync with a cluster
 /// right before launch. Minecraft reads its mods and profile files once at
@@ -125,9 +132,70 @@ struct Build {
 
 static VERSIONS: OnceLock<Vec<Value>> = OnceLock::new();
 
+/// Picks a build of CustomSkinLoader for the cluster's game version: the
+/// latest GitHub release first, Modrinth's newest supported build as fallback.
+async fn csl_build_for(mc_version: &str) -> Result<Option<Build>, String> {
+    match github_build().await {
+        Ok(Some(build)) => return Ok(Some(build)),
+        Ok(None) => {
+            tracing::warn!("latest github release ships no universal jar, using modrinth");
+        }
+        Err(err) => {
+            tracing::warn!(%err, "github release lookup failed, using modrinth");
+        }
+    }
+    modrinth_build_for(mc_version).await
+}
+
+/// The newest stable upstream release on GitHub. Its Universal jar covers
+/// 1.8 through 26.3, so it is used for every cluster without a version gate.
+async fn github_build() -> Result<Option<Build>, String> {
+    let text = github_client()?
+        .get(CSL_GITHUB_LATEST)
+        .send()
+        .await
+        .map_err(|err| format!("github request failed: {err}"))?
+        .error_for_status()
+        .map_err(|err| format!("github responded with an error: {err}"))?
+        .text()
+        .await
+        .map_err(|err| format!("github body read failed: {err}"))?;
+    let release: Value = serde_json::from_str(&text)
+        .map_err(|err| format!("github response was not JSON: {err}"))?;
+    let Some(assets) = release.get("assets").and_then(Value::as_array) else {
+        return Err("github release carried no assets".to_string());
+    };
+    for asset in assets {
+        let filename = asset.get("name").and_then(Value::as_str).unwrap_or_default();
+        let url = asset
+            .get("browser_download_url")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if filename.starts_with(CSL_PREFIX)
+            && filename.ends_with(".jar")
+            && !url.is_empty()
+            && !CSL_KNOWN_BAD.contains(&filename)
+        {
+            return Ok(Some(Build {
+                filename: filename.to_string(),
+                url: url.to_string(),
+            }));
+        }
+    }
+    Ok(None)
+}
+
+fn github_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent(concat!("AethelONE/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|err| err.to_string())
+}
+
 /// Picks the newest Modrinth build of CustomSkinLoader that both ships a
 /// Universal jar and claims support for the cluster's game version.
-async fn csl_build_for(mc_version: &str) -> Result<Option<Build>, String> {
+async fn modrinth_build_for(mc_version: &str) -> Result<Option<Build>, String> {
     if VERSIONS.get().is_none() {
         let text = reqwest::get(CSL_API)
             .await
@@ -164,7 +232,7 @@ async fn csl_build_for(mc_version: &str) -> Result<Option<Build>, String> {
         for file in files {
             let filename = file.get("filename").and_then(Value::as_str).unwrap_or_default();
             let url = file.get("url").and_then(Value::as_str).unwrap_or_default();
-            if !filename.ends_with(".jar") || url.is_empty() {
+            if !filename.ends_with(".jar") || url.is_empty() || CSL_KNOWN_BAD.contains(&filename) {
                 continue;
             }
             let build = || Build {
@@ -212,7 +280,9 @@ async fn fetch_jar(build: &Build) -> Result<PathBuf, String> {
     if std::fs::metadata(&cached).is_ok_and(|meta| meta.len() > 0) {
         return Ok(cached);
     }
-    let bytes = reqwest::get(&build.url)
+    let bytes = github_client()?
+        .get(&build.url)
+        .send()
         .await
         .map_err(|err| format!("jar download failed: {err}"))?
         .error_for_status()
