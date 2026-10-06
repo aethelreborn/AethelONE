@@ -1,3 +1,11 @@
+## 2.9.2 (2026-10-06)
+
+### Fixes
+
+- Stop the launch crash by installing CustomSkinLoader 15.1 from GitHub
+
+- Upstream sync: custom game arguments, mods folder sync, and browser links
+
 ## 2.9.1 (2026-10-05)
 
 ### Fixes
