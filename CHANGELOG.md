@@ -1,3 +1,9 @@
+## 2.9.4 (2026-10-06)
+
+### Fixes
+
+- Fix updater public key corruption that broke every auto-update since 2.8.3
+
 ## 2.9.3 (2026-10-06)
 
 ### Fixes
