@@ -1,3 +1,9 @@
+## 2.9.3 (2026-10-06)
+
+### Fixes
+
+- The active skin now reaches the game (CustomSkinLoader reads {USERNAME}.png)
+
 ## 2.9.2 (2026-10-06)
 
 ### Fixes
