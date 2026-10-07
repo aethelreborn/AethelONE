@@ -150,3 +150,115 @@ impl Component for EditInstanceModal {
         })
     }
 }
+
+#[derive(PartialEq)]
+pub struct DuplicateInstanceModal {
+    facts: InstanceFacts,
+    on_close: EventHandler<()>,
+}
+
+impl DuplicateInstanceModal {
+    pub fn new(facts: InstanceFacts, on_close: impl Into<EventHandler<()>>) -> Self {
+        Self {
+            facts,
+            on_close: on_close.into(),
+        }
+    }
+}
+
+impl Component for DuplicateInstanceModal {
+    fn render(&self) -> impl IntoElement {
+        let mutation = use_cluster_mutation();
+        let cluster_id = self.facts.cluster_id;
+
+        let state = DetailsState::seeded(
+            &format!("{} (copy)", self.facts.name),
+            self.facts.description.as_deref(),
+            &self.facts.tags,
+        );
+
+        let existing = self.facts.cover.clone();
+        let preview = state.preview_cover(existing.clone());
+        let tags = state.tags.read().clone();
+        let typed = state.typed_name();
+        let name_problem = validate_name(&typed, name_limit(self.facts.modpack)).err();
+        let ready = !typed.is_empty() && name_problem.is_none();
+
+        let description = state.description.read().trim().to_string();
+        let subtitle = if description.is_empty() {
+            format!(
+                "Copy of {} · {}",
+                kind_label(self.facts.kind),
+                self.facts.mc_version
+            )
+        } else {
+            description
+        };
+
+        let title = if typed.is_empty() {
+            format!("{} (copy)", self.facts.name)
+        } else {
+            typed.clone()
+        };
+
+        let art = version_art(Some(&self.facts.mc_version), Some(self.facts.mc_loader));
+        let art = match &preview {
+            Some((path, true)) => art.picked_cover(Some(path.clone())),
+            Some((path, false)) => art.cover(Some(path.clone())),
+            None => art,
+        };
+
+        let loader = self.facts.mc_loader.to_string();
+
+        let close_x = self.on_close.clone();
+        let close_cancel = self.on_close.clone();
+        let close_save = self.on_close.clone();
+
+        shell(Shell {
+            rail: rail(Rail {
+                art,
+                title,
+                subtitle,
+                card: facts_card(
+                    vec![
+                        ("Type", kind_label(self.facts.kind).to_string()),
+                        ("Version", self.facts.mc_version.clone()),
+                        ("Loader", loader),
+                    ],
+                ),
+                tags,
+            }),
+            eyebrow: Some("Duplicate instance".to_string()),
+            title: "Copy this instance".to_string(),
+            subtitle: "Every file is copied into a brand new instance — instanced worlds, \
+                       mods, shaders and textures included."
+                .to_string(),
+            body: details_body(
+                state,
+                format!("{} (copy)", self.facts.name),
+                existing,
+                version_art(Some(&self.facts.mc_version), Some(self.facts.mc_loader)),
+                name_problem,
+                name_limit(self.facts.modpack),
+            ),
+            scrolls_itself: false,
+            note: "The copy starts exactly like the original and shares nothing with it from there on."
+                .to_string(),
+            secondary_label: "Cancel".to_string(),
+            primary_label: "Create copy".to_string(),
+            primary_enabled: ready,
+            on_close: (move |()| close_x.call(())).into(),
+            on_secondary: (move |()| close_cancel.call(())).into(),
+            on_primary: (move |()| {
+                mutation.mutate(ClusterAction::DuplicateInstance {
+                    cluster_id,
+                    name: state.typed_name(),
+                    description: state.description_value(),
+                    tags: state.tags.read().clone(),
+                });
+                close_save.call(());
+            })
+            .into(),
+        })
+    }
+}

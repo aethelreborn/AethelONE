@@ -129,6 +129,74 @@ impl ClusterManager {
         self.create_core(global, options).await.map(Some)
     }
 
+    /// Copies an existing cluster's directory and registers it as a new instance.
+    /// The copy keeps every installed file in place so the next scan detects and
+    /// links the copied content instead of provisioning the instance from scratch.
+    #[tracing::instrument(level = "debug", skip(self, global))]
+    pub async fn duplicate(
+        &self,
+        global: &GameSettingsProfile,
+        source_id: ClusterId,
+        new_name: &str,
+        description: Option<&str>,
+        tags: &[String],
+    ) -> ClusterResult<Cluster> {
+        let _guard = self.provisioning.lock().await;
+        let source = self.get(source_id).await?;
+
+        let name = new_name.trim();
+        crate::naming::validate_name(name, Some(crate::naming::MAX_NAME_CHARS))
+            .map_err(ClusterError::InvalidName)?;
+
+        let folder_stem = Self::sanitize_name(&cap_folder_stem(name));
+        if folder_stem.is_empty() {
+            return Err(ClusterError::EmptyName);
+        }
+
+        self.duplicate_core(global, &source, name, &folder_stem, description, tags)
+            .await
+    }
+
+    async fn duplicate_core(
+        &self,
+        global: &GameSettingsProfile,
+        source: &Cluster,
+        name: &str,
+        folder_stem: &str,
+        description: Option<&str>,
+        tags: &[String],
+    ) -> ClusterResult<Cluster> {
+        let folder_name = resolve_unique_folder_name(folder_stem).await?;
+        let cluster_path = oneclient_common::paths::clusters_dir()?.join(&folder_name);
+
+        let source_dir = source.dir()?;
+
+        polyio::copy_dir(&source_dir, &cluster_path, &[]).await?;
+
+        match create_duplicate_row(
+            &self.db,
+            global,
+            source,
+            name,
+            description,
+            tags,
+            &folder_name,
+            &cluster_path,
+        )
+        .await
+        {
+            Ok(cluster) => {
+                tracing::info!(cluster_id = cluster.id, name = %cluster.name, "duplicated cluster");
+                Ok(cluster)
+            }
+            Err(err) => {
+                tracing::warn!(name = %name, error = %err, "cluster duplication failed, cleaning up directory");
+                let _ = polyio::remove_dir_all(&cluster_path).await;
+                Err(err)
+            }
+        }
+    }
+
     /// Callers MUST hold `self.provisioning` this does not lock
     #[tracing::instrument(level = "debug", skip(self, global))]
     async fn create_core(
@@ -317,7 +385,9 @@ impl ClusterManager {
                 _ => polyio::remove_file(&path).await,
             };
             match removed {
-                Ok(()) => tracing::info!(entry = %name, "cleared a leftover deleted cluster folder"),
+                Ok(()) => {
+                    tracing::info!(entry = %name, "cleared a leftover deleted cluster folder")
+                }
                 Err(err) => {
                     tracing::warn!(entry = %name, error = %err, "failed to clear a leftover deleted cluster folder")
                 }
@@ -403,12 +473,8 @@ impl ClusterManager {
         let cluster = self.get(cluster_id).await?;
 
         if !cluster.user_created {
-            cluster_dao::dismiss_provision(
-                &self.db,
-                &cluster.mc_version,
-                cluster.mc_loader as i64,
-            )
-            .await?;
+            cluster_dao::dismiss_provision(&self.db, &cluster.mc_version, cluster.mc_loader as i64)
+                .await?;
         }
 
         let trashed = if remove_files && cluster.is_isolated() {
@@ -621,6 +687,46 @@ async fn create_inner(
     Ok(cluster)
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn create_duplicate_row(
+    db: &DbPool,
+    global: &GameSettingsProfile,
+    source: &Cluster,
+    name: &str,
+    description: Option<&str>,
+    tags: &[String],
+    folder_name: &str,
+    cluster_path: &std::path::Path,
+) -> ClusterResult<Cluster> {
+    let effective =
+        resolve_cluster_profile(db, global, source.setting_profile_name.as_deref()).await?;
+    let profile = create_profile_from_global(db, &effective, folder_name, None, None).await?;
+
+    let tags = encode_tags(tags);
+    let row = cluster_dao::insert(
+        db,
+        &NewCluster {
+            name,
+            folder_name,
+            mc_version: &source.mc_version,
+            mc_loader: source.mc_loader as i64,
+            mc_loader_version: source.mc_loader_version.as_deref(),
+            setting_profile_name: Some(&profile.name),
+            stage: ClusterStage::NotReady as i64,
+            kind: source.kind.as_i64(),
+            user_created: i64::from(true),
+            description,
+            tags: &tags,
+            cover_path: source.cover_path.as_deref(),
+        },
+    )
+    .await?;
+
+    let cluster = Cluster::try_from_row(row)?;
+    crate::identity::write(cluster_path, &identity_of(&cluster)).await;
+    Ok(cluster)
+}
+
 fn is_reserved_device_name(stem: &str) -> bool {
     let upper = stem.to_ascii_uppercase();
     match upper.as_str() {
@@ -740,7 +846,16 @@ async fn ensure_content_dirs(cluster_path: &std::path::Path) -> ClusterResult<()
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use oneclient_common::domain::GameLoader;
+    use oneclient_db::models::ClusterKind;
+
     use super::{COVER_MAX_EDGE, ClusterManager, cap_folder_stem, is_cover_file, shrink_cover};
+
+    fn test_root() -> &'static Path {
+        crate::test_data::data_dir()
+    }
 
     #[test]
     fn a_long_modpack_name_gets_a_short_folder() {
@@ -802,5 +917,83 @@ mod tests {
         assert!(!is_cover_file("covers.png"));
         assert!(!is_cover_file("cover"));
         assert!(!is_cover_file("instance.json"));
+    }
+
+    #[tokio::test]
+    async fn duplicate_copies_the_cluster_folder_and_registers_a_new_instance() {
+        let root = test_root();
+        let pool = oneclient_db::connect(root.join("oneclient.db"))
+            .await
+            .expect("open database");
+        let manager = ClusterManager::new(pool);
+
+        let global = crate::profile::GameSettingsProfile::default_global_profile();
+        let source = manager
+            .create(
+                &global,
+                crate::options::CreateClusterOptions::new(
+                    "Source Instance",
+                    "1.20.1",
+                    GameLoader::Fabric,
+                )
+                .user_created(true)
+                .kind(ClusterKind::OneClient),
+            )
+            .await
+            .expect("create source cluster");
+
+        let source_dir = oneclient_common::paths::clusters_dir()
+            .unwrap()
+            .join(&source.folder_name);
+        std::fs::write(source_dir.join("marker.txt"), b"payload").unwrap();
+        std::fs::create_dir_all(source_dir.join("mods")).unwrap();
+        std::fs::write(source_dir.join("mods/a.jar"), b"mock").unwrap();
+
+        let copy = manager
+            .duplicate(
+                &global,
+                source.id,
+                "Copy Instance",
+                Some("A full copy"),
+                &["copy".to_string()],
+            )
+            .await
+            .expect("duplicate succeeds");
+
+        assert_ne!(copy.id, source.id, "the copy gets its own row");
+        assert_eq!(copy.name, "Copy Instance");
+        assert_eq!(copy.description.as_deref(), Some("A full copy"));
+        assert_eq!(copy.tags, vec!["copy".to_string()]);
+        assert!(
+            copy.user_created,
+            "an explicit copy is editable like any user-created instance"
+        );
+
+        let copy_dir = oneclient_common::paths::clusters_dir()
+            .unwrap()
+            .join(&copy.folder_name);
+        assert!(copy_dir.is_dir());
+        assert_eq!(
+            std::fs::read(copy_dir.join("marker.txt")).unwrap(),
+            b"payload"
+        );
+        assert_eq!(std::fs::read(copy_dir.join("mods/a.jar")).unwrap(), b"mock");
+        assert_eq!(
+            std::fs::read(source_dir.join("marker.txt")).unwrap(),
+            b"payload",
+            "the source folder is left untouched"
+        );
+
+        let names: Vec<String> = manager
+            .list()
+            .await
+            .expect("list clusters")
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert!(names.contains(&"Source Instance".to_string()));
+        assert!(names.contains(&"Copy Instance".to_string()));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

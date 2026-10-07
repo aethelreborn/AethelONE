@@ -553,10 +553,8 @@ fn strip_formatting(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::sync::OnceLock;
 
     use oneclient_common::domain::GameLoader;
-    use oneclient_common::paths::set_data_dir;
     use oneclient_db::models::ClusterKind;
 
     use crate::cluster::Cluster;
@@ -565,19 +563,8 @@ mod tests {
 
     use super::*;
 
-    static TEST_DIR: OnceLock<PathBuf> = OnceLock::new();
-
     fn test_root() -> &'static Path {
-        TEST_DIR.get_or_init(|| {
-            let dir = std::env::temp_dir().join(format!(
-                "oneclient-worlds-{}-{:?}",
-                std::process::id(),
-                std::time::SystemTime::now()
-            ));
-            let _ = std::fs::remove_dir_all(&dir);
-            set_data_dir(dir.clone());
-            dir
-        })
+        crate::test_data::data_dir()
     }
 
     fn cluster() -> Cluster {

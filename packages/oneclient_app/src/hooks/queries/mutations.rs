@@ -199,6 +199,12 @@ pub enum ClusterAction {
         cover_source: Option<PathBuf>,
         clear_cover: bool,
     },
+    DuplicateInstance {
+        cluster_id: ClusterId,
+        name: String,
+        description: Option<String>,
+        tags: Vec<String>,
+    },
     DeleteInstance {
         cluster_id: ClusterId,
     },
@@ -451,6 +457,34 @@ impl MutationCapability for ClusterMutation {
                     .map_err(|err| oneclient_content::ContentError::InvalidData {
                         reason: err.to_string(),
                     })
+            }
+            ClusterAction::DuplicateInstance {
+                cluster_id,
+                name,
+                description,
+                tags,
+            } => {
+                if state.games.is_active(*cluster_id) {
+                    Err(oneclient_content::ContentError::InvalidData {
+                        reason: "Close the game before duplicating this instance.".to_string(),
+                    })
+                } else {
+                    let global = state.settings.read().global_game_settings.clone();
+                    let outcome = state
+                        .clusters
+                        .duplicate(&global, *cluster_id, name, description.as_deref(), tags)
+                        .await
+                        .map(|_| ())
+                        .map_err(|err| oneclient_content::ContentError::InvalidData {
+                            reason: err.to_string(),
+                        });
+                    if outcome.is_ok() {
+                        services
+                            .events
+                            .signal(oneclient_events::Signal::ClustersChanged);
+                    }
+                    outcome
+                }
             }
             ClusterAction::DeleteInstance { cluster_id } => {
                 if crate::hooks::modpack_job_running(*cluster_id) {

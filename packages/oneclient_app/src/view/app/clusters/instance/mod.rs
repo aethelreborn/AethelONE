@@ -15,7 +15,7 @@ mod shell;
 mod steps;
 
 pub use create::CreateInstanceModal;
-pub use edit::{EditInstanceModal, InstanceFacts};
+pub use edit::{DuplicateInstanceModal, EditInstanceModal, InstanceFacts};
 
 pub fn tidy_file_name(raw: &str) -> String {
     let stem = raw

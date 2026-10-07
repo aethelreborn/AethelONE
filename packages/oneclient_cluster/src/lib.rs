@@ -9,6 +9,9 @@ mod options;
 mod profile;
 mod stage;
 
+#[cfg(test)]
+mod test_data;
+
 pub mod identity;
 pub mod logs;
 pub mod naming;

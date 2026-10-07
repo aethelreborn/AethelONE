@@ -19,7 +19,9 @@ use crate::hooks::{
 use crate::layout::cluster_content;
 use crate::theme::colors;
 use crate::ui::centered_note;
-use crate::view::app::clusters::{DeleteInstanceModal, EditInstanceModal, InstanceFacts};
+use crate::view::app::clusters::{
+    DeleteInstanceModal, DuplicateInstanceModal, EditInstanceModal, InstanceFacts,
+};
 use crate::view::app::settings::{section_header, settings_row, settings_row_disabled};
 use oneclient_core::clusters::{can_migrate_manually, rank_migration_sources};
 
@@ -320,6 +322,7 @@ struct InstanceRow {
 impl Component for InstanceRow {
     fn render(&self) -> impl IntoElement {
         let mut editing = use_state(|| false);
+        let mut duplicating = use_state(|| false);
         let mut deleting = use_state(|| false);
         let cluster_id = self.facts.cluster_id;
         let name = self.facts.name.clone();
@@ -343,6 +346,14 @@ impl Component for InstanceRow {
                     .text("Edit")
                     .into_element()
             }))
+            .maybe_child(editable.then(|| {
+                Button::new()
+                    .small()
+                    .secondary()
+                    .on_press(move |_| duplicating.set(true))
+                    .text("Duplicate")
+                    .into_element()
+            }))
             .child(
                 Button::new()
                     .small()
@@ -362,6 +373,10 @@ impl Component for InstanceRow {
             ))
             .maybe_child(editing.read().then(|| {
                 EditInstanceModal::new(facts.clone(), move |()| editing.set(false)).into_element()
+            }))
+            .maybe_child(duplicating.read().then(|| {
+                DuplicateInstanceModal::new(facts.clone(), move |()| duplicating.set(false))
+                    .into_element()
             }))
             .maybe_child(deleting.read().then(|| {
                 DeleteInstanceModal::new(cluster_id, name.clone(), move |()| deleting.set(false))
