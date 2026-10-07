@@ -15,7 +15,7 @@ use crate::components::{
 use crate::hooks::{
     ClusterAction, EssentialGuardKind, PendingEssential, disable_warnings, package_meta_batch,
     use_cluster_mutation, use_disable_warnings, use_essential_guard, use_game_snapshot,
-    use_package_meta_batch, use_selection, use_view_state,
+    use_package_meta_batch, use_selection, use_settings_snapshot, use_view_state,
 };
 
 use super::folder_list::confirm_dialog;
@@ -325,6 +325,7 @@ fn make_row(
 #[derive(Clone)]
 pub(super) enum Tab {
     All,
+    Recommended,
     Category(String),
     Browser,
     Local,
@@ -334,6 +335,7 @@ impl Tab {
     pub(super) fn label(&self) -> String {
         match self {
             Tab::All => "All".to_string(),
+            Tab::Recommended => "Recommended".to_string(),
             Tab::Category(c) => c.clone(),
             Tab::Browser => "Online".to_string(),
             Tab::Local => "Local".to_string(),
@@ -343,6 +345,8 @@ impl Tab {
     pub(super) fn matches(&self, p: &PackageEntry) -> bool {
         match self {
             Tab::All => p.opted_in,
+            // Recommended rows come from the curated catalog via `recommended_rows` never from `items`
+            Tab::Recommended => false,
             Tab::Category(c) => p.categories.iter().any(|pc| pc == c),
             Tab::Browser => (p.is_remote() || p.github_hosted) && !p.in_bundle(),
             Tab::Local => !p.is_remote() && !p.github_hosted,
@@ -371,9 +375,74 @@ fn visible_packages(
         .collect()
 }
 
+/// The curated tab: the real row for picks already in the cluster, a synthesized catalog row for the rest
+fn recommended_rows(
+    recommended: &[&'static crate::recommended::RecommendedPackage],
+    items: &[PackageEntry],
+    meta: &PackageMetaMap,
+) -> Vec<PackageEntry> {
+    recommended
+        .iter()
+        .map(|pick| {
+            items
+                .iter()
+                .find(|row| row.provider == pick.provider && row.package_id == pick.project_id)
+                .cloned()
+                .unwrap_or_else(|| catalog_row(pick, meta))
+        })
+        .collect()
+}
+
+/// Not installed and no bundle to pin it to so the row offers the package page and an install control
+fn catalog_row(
+    pick: &crate::recommended::RecommendedPackage,
+    meta: &PackageMetaMap,
+) -> PackageEntry {
+    let info = meta.get(&(pick.provider, pick.project_id.to_string()));
+    PackageEntry {
+        package_id: pick.project_id.to_string(),
+        bundle_name: None,
+        provider: pick.provider,
+        github_hosted: false,
+        github_url: None,
+        name: info
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| pick.name.to_string()),
+        file_name: String::new(),
+        author: info.map(|m| m.author.clone()).unwrap_or_default(),
+        version: None,
+        description: info
+            .map(|m| m.summary.clone())
+            .unwrap_or_else(|| pick.summary.to_string()),
+        icon_url: info.and_then(|m| m.icon_url.clone()),
+        size: 0,
+        categories: Vec::new(),
+        enabled: true,
+        installed: false,
+        hash: None,
+        manifest_default: false,
+        hidden: false,
+        opted_in: false,
+        advanced: false,
+        update_available: false,
+        shadowed: false,
+        seen_status: oneclient_core::SeenStatus::default(),
+        essential: None,
+    }
+}
+
 /// Stable so the toolbar's sort survives as the tie-break between equally good matches
 fn rank_by_query(rows: &mut [PackageEntry], query: &SearchQuery) {
     rows.sort_by_key(|p| std::cmp::Reverse(query_score(p, query)));
+}
+
+/// Bundle-managed rows stay pinned unless the user opted into bundled mod removal
+pub(crate) fn deletable_hash(p: &PackageEntry, allow_bundled_removal: bool) -> Option<String> {
+    if p.installed && (allow_bundled_removal || !p.in_bundle()) {
+        p.hash.clone()
+    } else {
+        None
+    }
 }
 
 pub fn bundle_categories(bundles: &[BundleWithUpdateStatus]) -> Vec<String> {
@@ -388,7 +457,12 @@ pub fn bundle_categories(bundles: &[BundleWithUpdateStatus]) -> Vec<String> {
 }
 
 /// `hidden` applies here too so a category of only hidden dependencies offers no tab
-fn build_tabs(categories: &[String], items: &[PackageEntry], hidden: HiddenFilter) -> Vec<Tab> {
+fn build_tabs(
+    categories: &[String],
+    items: &[PackageEntry],
+    hidden: HiddenFilter,
+    has_recommended: bool,
+) -> Vec<Tab> {
     let mut cats: Vec<String> = categories.to_vec();
     for item in items.iter().filter(|p| hidden.keep(p)) {
         for c in &item.categories {
@@ -400,6 +474,9 @@ fn build_tabs(categories: &[String], items: &[PackageEntry], hidden: HiddenFilte
 
     // Category tabs are hidden when empty All + Online + Local are always shown
     let mut tabs: Vec<Tab> = vec![Tab::All];
+    if has_recommended {
+        tabs.push(Tab::Recommended);
+    }
     tabs.extend(
         cats.into_iter()
             .map(Tab::Category)
@@ -477,6 +554,14 @@ impl Component for PackageManager {
 
         let session_live = use_game_snapshot().is_active(cluster_id);
         let cluster = crate::hooks::use_cluster(cluster_id);
+        // Curated rows borrow live meta the same way installed rows do the ids are static so the query stays cheap
+        let mut recommended_meta = PackageMetaMap::new();
+        for provider in ProviderId::REMOTE_PROVIDERS.iter().copied() {
+            let ids = crate::recommended::project_ids(content_type, provider);
+            for (project_id, meta) in package_meta_batch(&use_package_meta_batch(provider, ids)) {
+                recommended_meta.insert((provider, project_id), meta);
+            }
+        }
         let shares_content = cluster
             .as_ref()
             .map(|cluster| cluster.shares_content(content_type));
@@ -488,6 +573,7 @@ impl Component for PackageManager {
         let search = use_state(String::new);
         let enabled_filter = use_state(|| EnabledFilter::All);
         let hidden_filter = use_state(|| HiddenFilter::Hide);
+        let allow_bundled_removal = use_settings_snapshot().settings.allow_bundled_mod_removal;
         let advanced_open = use_state(|| false);
         let toolbar_width = use_state(|| 0f32);
         let selection = use_selection::<String>();
@@ -515,11 +601,19 @@ impl Component for PackageManager {
             .filter_map(|package| package.essential.map(|essential| essential.name))
             .collect();
 
-        let tabs = build_tabs(&self.categories, &items, hidden);
+        let recommended = crate::recommended::for_cluster(content_type, cluster.as_ref());
+        let tabs = build_tabs(&self.categories, &items, hidden, !recommended.is_empty());
         let active_idx = (*active.read()).min(tabs.len().saturating_sub(1));
         let tab_filter = tabs.get(active_idx);
 
-        let mut filtered = visible_packages(&items, tab_filter, &query, show, hidden);
+        let mut filtered = if matches!(tab_filter, Some(Tab::Recommended)) {
+            recommended_rows(&recommended, &items, &recommended_meta)
+                .into_iter()
+                .filter(|p| query_score(p, &query).is_some() && show.keep(p) && hidden.keep(p))
+                .collect()
+        } else {
+            visible_packages(&items, tab_filter, &query, show, hidden)
+        };
         sort_mode.sort(&mut filtered);
         // Relevance has to win while searching a fuzzy typo match would otherwise outrank the exact one
         if !query.is_empty() {
@@ -577,8 +671,7 @@ impl Component for PackageManager {
             .collect();
         let deletable: Vec<String> = chosen
             .iter()
-            .filter(|p| p.installed && !p.in_bundle())
-            .filter_map(|p| p.hash.clone())
+            .filter_map(|p| deletable_hash(p, allow_bundled_removal))
             .collect();
 
         let set_enabled: EventHandler<bool> = {
@@ -762,6 +855,155 @@ mod tests {
         assert!(
             rows.iter()
                 .any(|p| p.package_id == "only-declined" && declined.matches(p))
+        );
+    }
+
+    fn entry(
+        bundle_name: Option<&str>,
+        installed: bool,
+        hash: Option<&str>,
+        hidden: bool,
+        advanced: bool,
+    ) -> PackageEntry {
+        PackageEntry {
+            package_id: "pkg".into(),
+            bundle_name: bundle_name.map(str::to_string),
+            provider: ProviderId::Modrinth,
+            github_hosted: false,
+            github_url: None,
+            name: "Package".into(),
+            file_name: "pkg.jar".into(),
+            author: String::new(),
+            version: None,
+            description: String::new(),
+            icon_url: None,
+            size: 0,
+            categories: Vec::new(),
+            enabled: true,
+            installed,
+            hash: hash.map(str::to_string),
+            manifest_default: true,
+            hidden,
+            opted_in: true,
+            advanced,
+            update_available: false,
+            shadowed: false,
+            seen_status: oneclient_core::SeenStatus::default(),
+            essential: None,
+        }
+    }
+
+    #[test]
+    fn deletable_hash_pins_bundle_rows_until_removal_is_allowed() {
+        let bundled = entry(Some("Performance"), true, Some("h1"), false, false);
+        assert_eq!(deletable_hash(&bundled, false), None);
+        assert_eq!(deletable_hash(&bundled, true), Some("h1".to_string()));
+
+        let loose = entry(None, true, Some("h2"), false, false);
+        assert_eq!(deletable_hash(&loose, false), Some("h2".to_string()));
+
+        let not_installed = entry(Some("Performance"), false, None, false, false);
+        assert_eq!(deletable_hash(&not_installed, true), None);
+    }
+
+    #[test]
+    fn hide_filter_keeps_advanced_rows_reachable() {
+        let mut oneconfig = file("oneconfig", true, true);
+        oneconfig.file_type = BundleFileType::Advanced;
+        let bundles = [bundle(
+            "Performance",
+            true,
+            vec![oneconfig, file("private-lib", true, true)],
+        )];
+        let rows = bundle_packages(
+            Vec::new(),
+            &bundles,
+            &HashMap::new(),
+            &PackageMetaMap::new(),
+            &HashSet::new(),
+            ContentType::Mod,
+        );
+        let row = |id: &str| rows.iter().find(|r| r.package_id == id).unwrap();
+
+        assert!(row("oneconfig").advanced);
+        assert!(row("oneconfig").hidden);
+
+        let hide = HiddenFilter::Hide;
+        assert!(
+            hide.keep(row("oneconfig")),
+            "the Advanced section manages it"
+        );
+        assert!(
+            !hide.keep(row("private-lib")),
+            "plain hidden deps stay hidden"
+        );
+        assert!(HiddenFilter::Show.keep(row("private-lib")));
+    }
+
+    #[test]
+    fn the_recommended_chip_sits_right_after_all() {
+        let with_chip = build_tabs(&[], &[], HiddenFilter::Hide, true);
+        assert!(matches!(
+            with_chip.as_slice(),
+            [Tab::All, Tab::Recommended, ..]
+        ));
+
+        let without = build_tabs(&[], &[], HiddenFilter::Hide, false);
+        assert!(matches!(
+            without.as_slice(),
+            [Tab::All, Tab::Browser, Tab::Local]
+        ));
+    }
+
+    #[test]
+    fn recommended_rows_swap_in_the_real_row_for_installed_picks() {
+        let picks: Vec<&'static crate::recommended::RecommendedPackage> =
+            crate::recommended::RECOMMENDED_PACKAGES
+                .iter()
+                .take(2)
+                .collect();
+        let first = picks[0];
+
+        let mut real = entry(None, true, Some("h1"), false, false);
+        real.package_id = first.project_id.to_string();
+        real.provider = first.provider;
+
+        let rows = recommended_rows(&picks, &[real], &PackageMetaMap::new());
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].installed, "the installed pick keeps its real row");
+        assert_eq!(rows[0].hash.as_deref(), Some("h1"));
+        assert!(!rows[1].installed, "the missing pick gets a catalog row");
+        assert_eq!(rows[1].package_id, picks[1].project_id);
+        assert_eq!(
+            rows[1].name, picks[1].name,
+            "catalog values before meta lands"
+        );
+        assert!(!rows[1].opted_in, "uninstalled picks stay out of All");
+    }
+
+    #[test]
+    fn catalog_rows_take_live_meta_when_it_arrives() {
+        let pick = &crate::recommended::RECOMMENDED_PACKAGES[0];
+        let mut meta = PackageMetaMap::new();
+        meta.insert(
+            (pick.provider, pick.project_id.to_string()),
+            CachedPackageMeta {
+                provider: pick.provider,
+                project_id: pick.project_id.to_string(),
+                name: "Sodium (live)".to_string(),
+                summary: "live summary".to_string(),
+                author: "jellysquid".to_string(),
+                icon_url: Some("https://example.invalid/icon.png".to_string()),
+            },
+        );
+
+        let row = catalog_row(pick, &meta);
+        assert_eq!(row.name, "Sodium (live)");
+        assert_eq!(row.description, "live summary");
+        assert_eq!(row.author, "jellysquid");
+        assert_eq!(
+            row.icon_url.as_deref(),
+            Some("https://example.invalid/icon.png")
         );
     }
 }

@@ -20,6 +20,7 @@ mod motion;
 mod notifications;
 pub mod platform;
 pub mod protocol;
+pub mod recommended;
 pub mod recovery;
 mod routes;
 pub mod shortcut;

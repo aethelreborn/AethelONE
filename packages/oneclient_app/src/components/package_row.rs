@@ -1,18 +1,21 @@
 use freya::prelude::*;
 use freya::router::RouterContext;
-use oneclient_content::packages::ProviderId;
+use oneclient_content::packages::{ContentType, ProviderId};
 use oneclient_core::SeenStatus;
 
-use crate::components::{ContextMenu, Icon, IconType, toggle_controlled};
+use crate::components::{Button, ContextMenu, Icon, IconType, toggle_controlled};
 use crate::essential::EssentialPackage;
 use crate::hooks::{
-    ClusterAction, EssentialGuardKind, PendingEssential, disable_warnings, loaded_image,
-    use_cached_image, use_cluster_mutation, use_disable_warnings, use_essential_guard,
+    ClusterAction, EssentialGuardKind, PendingEssential, VERSIONS_PAGE_SIZE, content_type_for_slug,
+    disable_warnings, loaded_image, use_browser_compat, use_cached_image, use_cluster,
+    use_cluster_mutation, use_disable_warnings, use_dispatch, use_essential_guard,
+    use_installs_snapshot, use_package_versions_when, version_list,
 };
 use crate::routes::Route;
 use crate::theme::colors;
 use crate::ui::{ImageFallbackExt, border_all_color};
 use crate::utils::format_size;
+use crate::view::app::browser::preferred_version;
 
 pub(crate) const CARD_BG: Color = Color::from_rgb(26, 34, 41);
 pub(crate) const CARD_NAME: Color = Color::from_rgb(213, 219, 255);
@@ -196,6 +199,13 @@ impl Component for PackageRow {
 
         let on_context = Some(self.on_context.clone());
 
+        // Grid cards press as a whole a curated pick opens its package page rather than toggling nothing
+        let on_toggle = if is_catalog_row(&item) && layout == CardLayout::Grid {
+            open_package_page(cluster_id, package_type, &item)
+        } else {
+            on_toggle
+        };
+
         let (card, radius) = match layout {
             CardLayout::List => (
                 list_card(
@@ -304,12 +314,38 @@ pub(crate) fn disable_warning_body(
     }
 }
 
+/// A curated catalog pick never installed and never bundle-pinned gets install affordances instead of a toggle
+fn is_catalog_row(item: &PackageEntry) -> bool {
+    !item.installed && item.hash.is_none() && item.bundle_name.is_none() && item.is_remote()
+}
+
+/// The package page already owns version picking and per-version install remove for curated rows
+fn open_package_page(
+    cluster_id: i64,
+    package_type: &'static str,
+    item: &PackageEntry,
+) -> EventHandler<()> {
+    let provider = item.provider;
+    let package_id = item.package_id.clone();
+    let package_type = package_type.to_string();
+    (move |()| {
+        let _ = RouterContext::get().push(Route::BrowserPackage {
+            cluster_id,
+            package_type: package_type.clone(),
+            package_id: format!("{}:{}", provider as u8, package_id),
+        });
+    })
+    .into()
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn package_context_menu(
     x: f32,
     y: f32,
     item: &PackageEntry,
     cluster_id: i64,
     package_type: &'static str,
+    allow_bundled_removal: bool,
     on_delete: EventHandler<(String, String)>,
     on_select: EventHandler<()>,
 ) -> ContextMenu {
@@ -346,7 +382,7 @@ pub fn package_context_menu(
         );
     }
 
-    if item.installed && !item.in_bundle() {
+    if item.installed && (allow_bundled_removal || !item.in_bundle()) {
         let hash = item.hash.clone();
         let name = item.name.clone();
         menu = menu
@@ -393,7 +429,17 @@ fn list_card(
         .on_secondary_down(on_secondary(on_context.clone()))
         .child(package_info(item, package_type, cluster_id, icon))
         .child(meta_size(item.size))
-        .child(toggle_controlled(item.enabled, on_toggle))
+        .child(if is_catalog_row(item) {
+            InstallControl::new(
+                item.provider,
+                item.package_id.clone(),
+                cluster_id,
+                package_type,
+            )
+            .into_element()
+        } else {
+            toggle_controlled(item.enabled, on_toggle).into_element()
+        })
         .maybe_child(on_context.map(kebab_button))
         .into_element()
 }
@@ -945,4 +991,103 @@ pub(crate) fn pill(icon: Option<Element>, text: String, accent: Color) -> Elemen
                 .color(accent),
         )
         .into_element()
+}
+
+/// One-click install for curated rows the title still opens the package page for version picking
+#[derive(PartialEq)]
+struct InstallControl {
+    provider: ProviderId,
+    project_id: String,
+    cluster_id: i64,
+    package_type: &'static str,
+}
+
+impl InstallControl {
+    fn new(
+        provider: ProviderId,
+        project_id: String,
+        cluster_id: i64,
+        package_type: &'static str,
+    ) -> Self {
+        Self {
+            provider,
+            project_id,
+            cluster_id,
+            package_type,
+        }
+    }
+}
+
+impl Component for InstallControl {
+    fn render(&self) -> impl IntoElement {
+        let dispatch = use_dispatch();
+        let compat = *use_browser_compat().read();
+        let cluster = use_cluster(self.cluster_id);
+        let content_type = content_type_for_slug(self.package_type);
+
+        // The same narrowing the package page does so both agree on what "latest" installs
+        let (game_version, loader) = match (compat, &cluster) {
+            (true, Some(c)) => (
+                Some(c.mc_version.clone()),
+                (content_type == ContentType::Mod).then_some(c.mc_loader),
+            ),
+            _ => (None, None),
+        };
+        let versions = version_list(&use_package_versions_when(
+            true,
+            self.provider,
+            self.project_id.clone(),
+            game_version,
+            loader,
+            0,
+            VERSIONS_PAGE_SIZE,
+        ));
+        let latest = preferred_version(&versions, content_type).map(|v| v.version_id.clone());
+        let is_modpack = content_type == ContentType::Modpack;
+        let (installing, waiting) = use_installs_snapshot().package_busy(
+            is_modpack,
+            self.cluster_id,
+            self.provider,
+            &self.project_id,
+        );
+
+        Button::new()
+            .primary()
+            .small()
+            .enabled(latest.is_some() && !installing && !waiting)
+            .on_press({
+                let project_id = self.project_id.clone();
+                let cluster_id = self.cluster_id;
+                let provider = self.provider;
+                move |_| {
+                    if let Some(version_id) = latest.clone() {
+                        dispatch.install_package(
+                            cluster_id,
+                            provider,
+                            project_id.clone(),
+                            version_id,
+                            None,
+                        );
+                    }
+                }
+            })
+            .child(
+                Icon::new(if installing {
+                    IconType::Loading02
+                } else {
+                    IconType::Download01
+                })
+                .size(13.)
+                .color(colors::fg_primary()),
+            )
+            .child(
+                label()
+                    .text(if installing { "Installing" } else { "Install" })
+                    .font_size(11.)
+                    .font_weight(FontWeight::SEMI_BOLD)
+                    .max_lines(1)
+                    .color(colors::fg_primary()),
+            )
+            .into_element()
+    }
 }

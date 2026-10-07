@@ -9,7 +9,9 @@ use crate::components::{
     LazySection, PackageEntry, PackageRow, ScrollArea, Segment, SegmentedControl, TextInput,
     package_context_menu, use_shared_delete,
 };
-use crate::hooks::{ClusterAction, Selection, use_cluster_mutation, use_dispatch};
+use crate::hooks::{
+    ClusterAction, Selection, use_cluster_mutation, use_dispatch, use_settings_snapshot,
+};
 use crate::routes::Route;
 use crate::theme::colors;
 use crate::{Actions, utils};
@@ -114,7 +116,8 @@ impl HiddenFilter {
 
     pub(super) fn keep(self, p: &PackageEntry) -> bool {
         match self {
-            HiddenFilter::Hide => !p.hidden,
+            // Hidden advanced rows (e.g. OneConfig) stay reachable so the Advanced section can manage them
+            HiddenFilter::Hide => !p.hidden || p.advanced,
             HiddenFilter::Show => true,
         }
     }
@@ -770,6 +773,7 @@ impl Component for ContentBox {
 
         let dispatch = use_dispatch();
         let cluster = use_cluster_mutation();
+        let allow_bundled_removal = use_settings_snapshot().settings.allow_bundled_mod_removal;
         let mut menu = use_state(|| None::<(f32, f32, PackageEntry)>);
         let (on_delete, delete_dialog) = use_shared_delete(cluster_id, move |(_, hash)| {
             cluster.mutate(ClusterAction::RemoveArtifact { cluster_id, hash });
@@ -856,6 +860,7 @@ impl Component for ContentBox {
                     &item,
                     cluster_id,
                     package_type,
+                    allow_bundled_removal,
                     on_delete,
                     (move |()| selection.toggle(key.clone())).into(),
                 )

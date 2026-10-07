@@ -62,6 +62,11 @@ impl Component for SettingsLauncher {
             move || v
         });
 
+        let allow_bundled_removal = use_state({
+            let v = settings.allow_bundled_mod_removal;
+            move || v
+        });
+
         let mut first = use_state(|| true);
         use_side_effect(move || {
             let discord = *discord_rpc.read();
@@ -71,6 +76,7 @@ impl Component for SettingsLauncher {
             let background = *run_in_background.read();
             let tray = *show_tray_icon.read();
             let behaviour = *launch_behaviour.read();
+            let bundled_removal = *allow_bundled_removal.read();
             if *first.peek() {
                 first.set(false);
                 return;
@@ -83,6 +89,7 @@ impl Component for SettingsLauncher {
                 next.run_in_background = background;
                 next.show_tray_icon = tray;
                 next.launch_behaviour = behaviour;
+                next.allow_bundled_mod_removal = bundled_removal;
             });
         });
 
@@ -136,6 +143,16 @@ impl Component for SettingsLauncher {
                     toggle(cosmetics_unlock),
                     cosmetics_unlock,
                     defaults.cosmetics_unlock,
+                ),
+            ))
+            .child(settings_row(
+                IconType::Trash01,
+                "Allow Removing Bundled Mods",
+                "Offer Delete for mods installed by instance bundles (e.g. OneConfig). They can always be disabled without this.",
+                resettable(
+                    toggle(allow_bundled_removal),
+                    allow_bundled_removal,
+                    defaults.allow_bundled_mod_removal,
                 ),
             ))
             .child(settings_row(

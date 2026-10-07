@@ -84,6 +84,22 @@ const SEARCH_INDEX: &[SearchItem] = &[
         route: Route::SettingsLauncher {},
     },
     SearchItem {
+        id: "launcher.bundled_mod_removal",
+        icon: IconType::Trash01,
+        title: "Allow Removing Bundled Mods",
+        description: "Offer Delete for mods installed by instance bundles (e.g. OneConfig).",
+        keywords: &[
+            "oneconfig",
+            "bundle",
+            "bundled",
+            "delete",
+            "remove",
+            "mods",
+            "advanced",
+        ],
+        route: Route::SettingsLauncher {},
+    },
+    SearchItem {
         id: "appearance.accent_color",
         icon: IconType::PaintPour,
         title: "Accent color",

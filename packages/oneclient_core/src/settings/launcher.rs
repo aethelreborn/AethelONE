@@ -60,6 +60,8 @@ pub struct LauncherSettings {
     pub max_concurrent_requests: usize,
     pub global_game_settings: GameSettingsProfile,
     pub allow_parallel_running_clusters: bool,
+    /// Offers Delete for bundle-managed mods (e.g. OneConfig) that are normally pinned to their instance bundles
+    pub allow_bundled_mod_removal: bool,
     pub launch_behaviour: LaunchBehaviour,
     pub run_in_background: bool,
     pub show_tray_icon: bool,
@@ -107,6 +109,7 @@ impl Default for LauncherSettings {
             max_concurrent_requests: 25,
             global_game_settings: GameSettingsProfile::default_global_profile(),
             allow_parallel_running_clusters: false,
+            allow_bundled_mod_removal: false,
             launch_behaviour: LaunchBehaviour::default(),
             run_in_background: false,
             show_tray_icon: true,
@@ -130,5 +133,18 @@ impl Default for LauncherSettings {
             data_dir: None,
             previous_data_dir: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_mod_removal_stays_opt_in() {
+        assert!(!LauncherSettings::default().allow_bundled_mod_removal);
+
+        let legacy: LauncherSettings = serde_json::from_str("{}").expect("missing fields default");
+        assert!(!legacy.allow_bundled_mod_removal);
     }
 }

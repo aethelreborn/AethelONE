@@ -10,7 +10,7 @@ use modpack_prompt::{ModpackVersionPrompt, minecraft_choices};
 use world_prompt::WorldInstallPrompt;
 
 /// Projects shipping both a mod and a data pack tag the mod files with a loader
-fn preferred_version(
+pub(crate) fn preferred_version(
     versions: &[oneclient_content::packages::types::VersionSummary],
     content_type: oneclient_content::packages::ContentType,
 ) -> Option<&oneclient_content::packages::types::VersionSummary> {

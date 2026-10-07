@@ -1145,6 +1145,20 @@ mod tests {
     }
 
     #[test]
+    fn a_removed_override_survives_the_bundle_heal_pass() {
+        assert!(
+            !wants_file(&file(true), Some(OverrideType::Removed), true),
+            "deleting a bundled file must not be undone by the next launch"
+        );
+        assert!(!wants_file(&file(true), Some(OverrideType::Disabled), true));
+        assert!(
+            !wants_file(&file(true), None, false),
+            "declined bundles stay out"
+        );
+        assert!(wants_file(&file(false), Some(OverrideType::Enabled), false));
+    }
+
+    #[test]
     fn enabled_override_round_trips_through_the_db_string() {
         let parsed = OverrideType::parse(OverrideType::Enabled.as_str());
         assert_eq!(parsed, Some(OverrideType::Enabled));
