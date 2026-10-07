@@ -149,12 +149,19 @@ impl Component for SettingsMinecraft {
             .child(settings_row(
                 IconType::Terminal,
                 "JVM Arguments",
-                "Extra arguments passed to Java. Separate them with spaces; quote values containing spaces.",
+                "Extra arguments passed to Java. Separate them with spaces; quote values containing spaces. Use the GC preset dropdown to fill in a balanced starting point.",
                 resettable(
-                    TextInput::new(jvm_args)
-                        .placeholder("-XX:+UseG1GC")
-                        .expandable(true)
-                        .width(Size::px(220.)),
+                    rect()
+                        .horizontal()
+                        .cross_align(Alignment::Center)
+                        .spacing(8.)
+                        .child(
+                            TextInput::new(jvm_args)
+                                .placeholder("-XX:+UseG1GC")
+                                .expandable(true)
+                                .width(Size::px(220.)),
+                        )
+                        .child(jvm_preset_field(jvm_args)),
                     jvm_args,
                     defaults.launch_args.clone().unwrap_or_default(),
                 ),
@@ -326,6 +333,33 @@ fn update_mode_field(mut selected: State<PackageUpdateMode>) -> impl IntoElement
         .on_select(move |idx: usize| {
             if let Some(mode) = PackageUpdateMode::ALL.get(idx).copied() {
                 selected.set(mode);
+            }
+        })
+}
+
+const JVM_PRESETS: &[(&str, &str)] = &[
+    (
+        "G1 garbage collector",
+        "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC",
+    ),
+    ("Shenandoah (low pauses)", "-XX:+UseShenandoahGC"),
+    ("ZGC (experimental)", "-XX:+UseZGC -XX:+ZUncommit"),
+    (
+        "Aikar's flags (server)",
+        "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs",
+    ),
+];
+
+fn jvm_preset_field(mut args: State<String>) -> impl IntoElement {
+    let labels: Vec<String> = std::iter::once("GC preset".to_string())
+        .chain(JVM_PRESETS.iter().map(|(label, _)| label.to_string()))
+        .collect();
+    Dropdown::new("GC preset", labels)
+        .width(Size::px(132.))
+        .height(Size::px(34.))
+        .on_select(move |idx: usize| {
+            if let Some((_, preset_args)) = JVM_PRESETS.get(idx.wrapping_sub(1)) {
+                args.set(preset_args.to_string());
             }
         })
 }
