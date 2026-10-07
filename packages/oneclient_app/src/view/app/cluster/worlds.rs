@@ -11,9 +11,10 @@ use crate::components::{
     meta_size, meta_text, on_secondary,
 };
 use crate::hooks::{
-    backup_world, delete_world, duplicate_world, import_world_zip, query_is_loading, rename_world,
-    spawn_world_task, try_cluster_worlds, try_world_size, use_cluster, use_cluster_worlds,
-    use_datapack_world, use_dispatch, use_saves_folder_watch, use_view_state, use_world_size,
+    Actions, backup_world, delete_world, duplicate_world, import_world_zip, query_is_loading,
+    rename_world, spawn_world_task, try_cluster_worlds, try_world_size, use_cluster,
+    use_cluster_worlds, use_datapack_world, use_dispatch, use_saves_folder_watch, use_view_state,
+    use_world_size,
 };
 use crate::layout::cluster_content;
 use crate::routes::Route;
@@ -54,6 +55,48 @@ enum WorldOp {
 
 fn world_safe(name: &str) -> bool {
     !name.is_empty() && !name.contains(&['/', '\\'][..])
+}
+
+fn spawn_import_world(dispatch: Actions, cluster_id: i64, in_use: bool) {
+    if in_use {
+        notify_in_use(&dispatch, "Worlds");
+        return;
+    }
+    let dispatch = dispatch.clone();
+    spawn_forever(async move {
+        let Some(file) = rfd::AsyncFileDialog::new()
+            .set_title("Import a world backup")
+            .add_filter("World backup", &["zip"])
+            .pick_file()
+            .await
+        else {
+            return;
+        };
+        let zip = file.path().to_path_buf();
+        let name = zip
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_string())
+            .filter(|stem| !stem.is_empty() && world_safe(stem))
+            .unwrap_or_else(|| "imported_world".to_string());
+        match import_world_zip(cluster_id, name.clone(), zip).await {
+            Ok(()) => {
+                dispatch
+                    .notify("World imported")
+                    .body(format!("{name} was restored from the backup."))
+                    .info()
+                    .icon(IconType::FolderCheck)
+                    .toast_only()
+                    .send();
+            }
+            Err(err) => {
+                dispatch
+                    .notify("Couldn't import world")
+                    .body(err.to_string())
+                    .error()
+                    .send();
+            }
+        }
+    });
 }
 
 fn open_datapacks(cluster_id: i64, world: String, mut remembered: State<HashMap<i64, String>>) {
@@ -195,6 +238,18 @@ impl Component for ClusterWorlds {
                 .text("Back up all")
                 .into_element(),
         );
+        controls.push(
+            Button::new()
+                .secondary()
+                .tooltip("Import a world from a .zip file")
+                .on_press({
+                    let dispatch = dispatch.clone();
+                    move |_| spawn_import_world(dispatch.clone(), cluster_id, in_use)
+                })
+                .child(Icon::new(IconType::FilePlus02).size(14.))
+                .text("Import world")
+                .into_element(),
+        );
         controls.push(layout_toggle(layout));
 
         let menu_overlay = menu.read().clone().map(|(x, y, info)| {
@@ -268,47 +323,7 @@ impl Component for ClusterWorlds {
                 })
                 .action(IconType::FilePlus02, "Restore from backup\u{2026}", {
                     let dispatch = dispatch.clone();
-                    move |()| {
-                        if in_use {
-                            notify_in_use(&dispatch, "Worlds");
-                            return;
-                        }
-                        let dispatch = dispatch.clone();
-                        spawn_forever(async move {
-                            let Some(file) = rfd::AsyncFileDialog::new()
-                                .set_title("Restore a world backup")
-                                .add_filter("World backup", &["zip"])
-                                .pick_file()
-                                .await
-                            else {
-                                return;
-                            };
-                            let zip = file.path().to_path_buf();
-                            let name = zip
-                                .file_stem()
-                                .map(|stem| stem.to_string_lossy().to_string())
-                                .filter(|stem| !stem.is_empty() && world_safe(stem))
-                                .unwrap_or_else(|| "restored_world".to_string());
-                            match import_world_zip(cluster_id, name.clone(), zip).await {
-                                Ok(()) => {
-                                    dispatch
-                                        .notify("World restored")
-                                        .body(format!("{name} was restored from the backup."))
-                                        .info()
-                                        .icon(IconType::FolderCheck)
-                                        .toast_only()
-                                        .send();
-                                }
-                                Err(err) => {
-                                    dispatch
-                                        .notify("Couldn't restore world")
-                                        .body(err.to_string())
-                                        .error()
-                                        .send();
-                                }
-                            }
-                        });
-                    }
+                    move |()| spawn_import_world(dispatch.clone(), cluster_id, in_use)
                 })
                 .separator()
                 .danger_action(IconType::Trash01, "Delete", {
