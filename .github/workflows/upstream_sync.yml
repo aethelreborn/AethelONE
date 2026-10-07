@@ -1,14 +1,14 @@
 name: Upstream Sync
 
 # Keeps this fork tracking Polyfrost/OneLauncher: merge upstream/main, run the
-# fast gates, push, then notify (a GITHUB_TOKEN push does not trigger
+# fast gates, push, then notify nightly (a GITHUB_TOKEN push does not trigger
 # push: workflows) and cut a release when upstream left something to release.
 # Any conflict beyond Cargo.lock stops the run and opens an issue - nothing
 # auto-resolved ever reaches main.
 
 on:
   schedule:
-    - cron: '13 * * * *'
+    - cron: '43 */6 * * *'
   workflow_dispatch:
     inputs:
       release:
