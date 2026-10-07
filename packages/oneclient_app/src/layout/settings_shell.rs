@@ -100,6 +100,24 @@ const SEARCH_INDEX: &[SearchItem] = &[
         route: Route::SettingsLauncher {},
     },
     SearchItem {
+        id: "launcher.auto_update",
+        icon: IconType::RefreshCw01,
+        title: "Auto Update",
+        description: "Download and install new releases as soon as the launcher starts.",
+        keywords: &[
+            "update", "upgrade", "auto", "release", "version", "download",
+        ],
+        route: Route::SettingsLauncher {},
+    },
+    SearchItem {
+        id: "launcher.check_for_updates",
+        icon: IconType::DownloadCloud02,
+        title: "Check for Updates",
+        description: "Manually check the release feed and install the newest AethelONE.",
+        keywords: &["update", "upgrade", "manual", "check", "release", "version"],
+        route: Route::SettingsLauncher {},
+    },
+    SearchItem {
         id: "appearance.accent_color",
         icon: IconType::PaintPour,
         title: "Accent color",

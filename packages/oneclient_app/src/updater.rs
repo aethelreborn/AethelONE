@@ -7,11 +7,26 @@ use uuid::Uuid;
 use crate::constants::{RELEASES_URL, UPDATER_ENDPOINT, UPDATER_PUBKEY};
 // Only the Linux package-manager install path builds release URLs itself.
 #[cfg(target_os = "linux")]
-use anyhow::Context;
-#[cfg(target_os = "linux")]
 use crate::constants::RELEASES_DOWNLOAD_BASE;
+#[cfg(target_os = "linux")]
+use anyhow::Context;
 
 pub const UPDATE_CHOICE_INSTALL: &str = "update.install";
+
+/// How an update check ended. The startup path ignores it; the Settings manual
+/// trigger reports it so the row can say what happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateCheck {
+    UpToDate,
+    /// An update exists but the prompt was dismissed before installing.
+    Declined,
+    /// The update downloaded and installed; restarting applies it.
+    Installed,
+    /// This install can't replace itself in place; a notification points at the releases page.
+    NotSelfUpdatable,
+    /// The check never produced an answer (network, state, or verification failure).
+    Failed,
+}
 
 enum UpdateAnswer {
     Install,
@@ -88,6 +103,26 @@ pub fn spawn_update_check(auto_install: bool, events: EventBus) {
     });
 }
 
+/// Settings' manual trigger: checks without auto-installing so the user always
+/// confirms, then reports what happened for the row to display.
+pub async fn manual_check() -> UpdateCheck {
+    let events = match crate::launcher::state() {
+        Ok(state) => state.services.events.clone(),
+        Err(err) => {
+            tracing::warn!("manual update check has no launcher state: {err}");
+            return UpdateCheck::Failed;
+        }
+    };
+
+    match run_check(false, events).await {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            tracing::warn!("manual update check failed: {err:#}");
+            UpdateCheck::Failed
+        }
+    }
+}
+
 /// Debug-only drives the full auto-update UX
 pub fn spawn_simulated_update() {
     tokio::spawn(async move {
@@ -128,12 +163,12 @@ async fn run_simulated_update() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_check(auto_install: bool, events: EventBus) -> anyhow::Result<()> {
+async fn run_check(auto_install: bool, events: EventBus) -> anyhow::Result<UpdateCheck> {
     // `check_update` performs a blocking HTTP request so offload it to a thread pool
     let (update, kind) = tokio::task::spawn_blocking(check_for_update).await??;
     let Some(update) = update else {
         tracing::info!("no update available");
-        return Ok(());
+        return Ok(UpdateCheck::UpToDate);
     };
 
     tracing::info!("update available: {} ({kind:?})", update.version);
@@ -149,24 +184,31 @@ async fn run_check(auto_install: bool, events: EventBus) -> anyhow::Result<()> {
                 update.version, RELEASES_URL
             ))
             .send();
-        return Ok(());
+        return Ok(UpdateCheck::NotSelfUpdatable);
     }
 
     if !auto_install && events.ask(update_prompt(&update.version)).await?.is_none() {
         tracing::info!("user declined update {}", update.version);
-        return Ok(());
+        return Ok(UpdateCheck::Declined);
     }
 
     #[cfg(target_os = "linux")]
     {
         match kind {
-            InstallKind::Deb => return download_and_install_package(update, "deb", events).await,
-            InstallKind::Rpm => return download_and_install_package(update, "rpm", events).await,
+            InstallKind::Deb => {
+                download_and_install_package(update, "deb", events).await?;
+                return Ok(UpdateCheck::Installed);
+            }
+            InstallKind::Rpm => {
+                download_and_install_package(update, "rpm", events).await?;
+                return Ok(UpdateCheck::Installed);
+            }
             _ => {}
         }
     }
 
-    download_and_install(update, events).await
+    download_and_install(update, events).await?;
+    Ok(UpdateCheck::Installed)
 }
 
 fn can_self_update(kind: InstallKind) -> bool {
@@ -174,7 +216,8 @@ fn can_self_update(kind: InstallKind) -> bool {
         return false;
     }
 
-    if std::env::var_os("ONECLIENT_DISABLE_AUTOUPDATE").is_some_and(|val| val.eq_ignore_ascii_case("1"))
+    if std::env::var_os("ONECLIENT_DISABLE_AUTOUPDATE")
+        .is_some_and(|val| val.eq_ignore_ascii_case("1"))
     {
         return false;
     }
@@ -511,7 +554,11 @@ fn pkexec(program: &str, args: &[&str]) -> anyhow::Result<()> {
     match output.status.code() {
         // polkit: 126 = dismissed by the user, 127 = not authorized / no auth agent
         Some(126) | Some(127) => Err(UpdateCancelled.into()),
-        _ => anyhow::bail!("exited with {}{}", output.status, stderr_suffix(&output.stderr)),
+        _ => anyhow::bail!(
+            "exited with {}{}",
+            output.status,
+            stderr_suffix(&output.stderr)
+        ),
     }
 }
 

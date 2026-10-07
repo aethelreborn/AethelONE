@@ -147,4 +147,12 @@ mod tests {
         let legacy: LauncherSettings = serde_json::from_str("{}").expect("missing fields default");
         assert!(!legacy.allow_bundled_mod_removal);
     }
+
+    #[test]
+    fn auto_update_stays_on_for_existing_installs() {
+        assert!(LauncherSettings::default().auto_update);
+
+        let legacy: LauncherSettings = serde_json::from_str("{}").expect("missing fields default");
+        assert!(legacy.auto_update);
+    }
 }

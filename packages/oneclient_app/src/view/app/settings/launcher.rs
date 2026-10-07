@@ -17,6 +17,7 @@ use crate::hooks::{
 };
 use crate::theme::colors;
 use crate::ui::{border_all_color, note, path_block};
+use crate::updater::UpdateCheck;
 
 #[derive(PartialEq)]
 pub struct SettingsLauncher;
@@ -67,6 +68,14 @@ impl Component for SettingsLauncher {
             move || v
         });
 
+        let auto_update = use_state({
+            let v = settings.auto_update;
+            move || v
+        });
+
+        let checking_updates = use_state(|| false);
+        let update_status = use_state(|| None::<UpdateCheck>);
+
         let mut first = use_state(|| true);
         use_side_effect(move || {
             let discord = *discord_rpc.read();
@@ -77,6 +86,7 @@ impl Component for SettingsLauncher {
             let tray = *show_tray_icon.read();
             let behaviour = *launch_behaviour.read();
             let bundled_removal = *allow_bundled_removal.read();
+            let updates = *auto_update.read();
             if *first.peek() {
                 first.set(false);
                 return;
@@ -90,6 +100,7 @@ impl Component for SettingsLauncher {
                 next.show_tray_icon = tray;
                 next.launch_behaviour = behaviour;
                 next.allow_bundled_mod_removal = bundled_removal;
+                next.auto_update = updates;
             });
         });
 
@@ -106,6 +117,18 @@ impl Component for SettingsLauncher {
                 let _ = RouterContext::get().replace(Route::OnboardingTerms {});
             })
             .text("Review");
+
+        let checking_now = *checking_updates.read();
+        let check_updates = Button::new()
+            .secondary()
+            .small()
+            .disabled(checking_now)
+            .on_press(move |_| start_update_check(checking_updates, update_status))
+            .text(if checking_now {
+                "Checking…"
+            } else {
+                "Check for updates"
+            });
 
         settings_page()
             .child(section_header("GENERAL"))
@@ -192,6 +215,19 @@ impl Component for SettingsLauncher {
                     defaults.show_tray_icon,
                 ),
             ))
+            .child(section_header("UPDATES"))
+            .child(settings_row(
+                IconType::RefreshCw01,
+                "Auto Update",
+                "Download and install new releases as soon as the launcher starts, without asking.",
+                resettable(toggle(auto_update), auto_update, defaults.auto_update),
+            ))
+            .child(settings_row(
+                IconType::DownloadCloud02,
+                "Check for Updates",
+                update_status_text(*update_status.read()),
+                check_updates,
+            ))
             .child(section_header("FOLDERS AND FILES"))
             .child(DataFolder.into_element())
             .into_element()
@@ -212,6 +248,39 @@ fn launch_behaviour_field(mut selected: State<LaunchBehaviour>) -> impl IntoElem
                 selected.set(behaviour);
             }
         })
+}
+
+/// Freya's `spawn` runs the future on the launcher's tokio runtime without demanding
+/// a `Send` future, so the check awaits here and writes straight back into row state.
+fn start_update_check(mut checking: State<bool>, mut status: State<Option<UpdateCheck>>) {
+    if *checking.peek() {
+        return;
+    }
+
+    checking.set(true);
+    status.set(None);
+
+    spawn(async move {
+        status.set(Some(crate::updater::manual_check().await));
+        checking.set(false);
+    });
+}
+
+fn update_status_text(status: Option<UpdateCheck>) -> &'static str {
+    match status {
+        None => "Check the AethelONE release feed for a newer version.",
+        Some(UpdateCheck::UpToDate) => "You're up to date — this is the latest AethelONE release.",
+        Some(UpdateCheck::Declined) => {
+            "An update is ready. Run the check again whenever you want to install it."
+        }
+        Some(UpdateCheck::Installed) => {
+            "The update is installed. Restart AethelONE to start using it."
+        }
+        Some(UpdateCheck::NotSelfUpdatable) => {
+            "This install can't update itself — get the latest package from the releases page."
+        }
+        Some(UpdateCheck::Failed) => "Couldn't reach the update server. Try again in a moment.",
+    }
 }
 
 #[derive(PartialEq)]
