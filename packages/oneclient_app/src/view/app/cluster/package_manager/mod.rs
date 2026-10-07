@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use freya::prelude::*;
 use oneclient_common::search::{MatchScore, SearchQuery};
@@ -497,6 +498,7 @@ pub struct PackageManager {
     cluster_id: i64,
     items: Vec<PackageEntry>,
     categories: Vec<String>,
+    open_folder: Option<PathBuf>,
 }
 
 impl PackageManager {
@@ -508,6 +510,7 @@ impl PackageManager {
         cluster_id: i64,
         items: Vec<PackageEntry>,
         categories: Vec<String>,
+        open_folder: Option<PathBuf>,
     ) -> Self {
         Self {
             title,
@@ -517,6 +520,7 @@ impl PackageManager {
             cluster_id,
             items,
             categories,
+            open_folder,
         }
     }
 }
@@ -775,6 +779,7 @@ impl Component for PackageManager {
                 package_type,
                 toolbar_width,
                 &bulk,
+                self.open_folder.clone(),
             ))
             .child(
                 ContentBox::new(

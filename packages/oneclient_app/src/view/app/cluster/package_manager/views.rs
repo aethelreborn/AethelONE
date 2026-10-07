@@ -1,3 +1,4 @@
+use super::super::folder_list::folder_button;
 use super::*;
 
 use freya::router::RouterContext;
@@ -276,6 +277,7 @@ pub(super) fn toolbar_bar(
     package_type: &'static str,
     mut toolbar_width: State<f32>,
     bulk: &Bulk,
+    open_folder: Option<PathBuf>,
 ) -> impl IntoElement {
     let chips = tabs.iter().enumerate().map(|(i, tab)| {
         let mut active = active;
@@ -335,6 +337,9 @@ pub(super) fn toolbar_bar(
         )
         .into_element(),
     ];
+    if let Some(folder) = open_folder {
+        controls.insert(0, folder_button(folder));
+    }
 
     controls.push(
         SegmentedControl::new(layout)

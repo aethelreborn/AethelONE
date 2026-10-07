@@ -67,6 +67,7 @@ impl Component for ClusterMods {
                     self.cluster_id,
                     items,
                     all_categories,
+                    oneclient_common::paths::cluster_mods_dir(&cluster.folder_name).ok(),
                 )
                 .into_element(),
             )

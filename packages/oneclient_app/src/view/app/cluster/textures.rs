@@ -8,6 +8,7 @@ use crate::hooks::{
 use crate::layout::cluster_content;
 
 use super::cluster_not_found;
+use super::folder_list::content_folder;
 use super::package_manager::{
     PackageManager, bundle_categories, bundle_packages, use_content_meta,
 };
@@ -28,7 +29,7 @@ impl Component for ClusterTextures {
         let content_items = cluster_content_items(&content);
         let meta = use_content_meta(&content_items, &bundle_items, ContentType::ResourcePack);
 
-        let Some(_cluster) = use_cluster(self.cluster_id) else {
+        let Some(cluster) = use_cluster(self.cluster_id) else {
             return cluster_not_found();
         };
 
@@ -52,6 +53,7 @@ impl Component for ClusterTextures {
                     self.cluster_id,
                     items,
                     all_categories,
+                    content_folder(&cluster, ContentType::ResourcePack),
                 )
                 .into_element(),
             )

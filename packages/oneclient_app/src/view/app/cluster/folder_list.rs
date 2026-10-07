@@ -116,6 +116,15 @@ pub(super) fn folder_button(folder: PathBuf) -> Element {
         .into_element()
 }
 
+pub(super) fn content_folder(
+    cluster: &Cluster,
+    content_type: oneclient_content::packages::ContentType,
+) -> Option<PathBuf> {
+    oneclient_common::paths::cluster_dir(&cluster.folder_name)
+        .ok()
+        .map(|dir| dir.join(content_type.folder_name()))
+}
+
 pub(super) fn layout_toggle(layout: State<ViewLayout>) -> Element {
     SegmentedControl::new(layout)
         .height(CONTROL_H)
