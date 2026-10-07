@@ -1,3 +1,25 @@
+## 2.11.0 (2026-10-07)
+
+### Features
+
+- Open content folders from the Mods, Shaders, and Textures toolbars
+
+- Duplicate an instance
+
+- GC presets for JVM arguments
+
+- Update all outdated content at once
+
+- Back up all worlds at once
+
+- Worlds can be backed up to and restored from .zip archives
+
+- Import worlds from the Worlds toolbar
+
+- Select multiple worlds to back up or delete at once
+
+- Sort worlds by name or by most recent
+
 ## 2.10.0 (2026-10-07)
 
 ### Features
