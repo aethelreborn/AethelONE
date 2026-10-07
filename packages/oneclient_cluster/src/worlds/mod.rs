@@ -22,6 +22,12 @@ pub enum WorldsError {
     NotFound(String),
     #[error("failed to move to trash: {0}")]
     Trash(String),
+    #[error("a world named '{0}' already exists")]
+    AlreadyExists(String),
+    #[error("failed to rename world: {0}")]
+    Rename(String),
+    #[error("failed to duplicate world: {0}")]
+    Duplicate(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -135,6 +141,52 @@ pub fn world_size(cluster: &Cluster, world: &str) -> ClusterResult<u64> {
 #[tracing::instrument(level = "debug", skip(cluster), fields(cluster_id = cluster.id))]
 pub fn delete_world(cluster: &Cluster, world: &str) -> ClusterResult<()> {
     move_to_trash(&world_dir(cluster, world)?)
+}
+
+fn world_save_dir(cluster: &Cluster, name: &str) -> ClusterResult<PathBuf> {
+    Ok(cluster.game_dir()?.join(SAVES_DIR).join(plain_name(name)?))
+}
+
+fn world_folder_exists(cluster: &Cluster, name: &str) -> bool {
+    world_save_dir(cluster, name).is_ok_and(|dir| dir.is_dir())
+}
+
+#[tracing::instrument(level = "debug", skip(cluster), fields(cluster_id = cluster.id))]
+pub async fn rename_world(cluster: &Cluster, world: &str, name: &str) -> ClusterResult<()> {
+    let from = world_dir(cluster, world)?;
+    let to = world_save_dir(cluster, name)?;
+
+    if from == to {
+        return Ok(());
+    }
+    if world_folder_exists(cluster, name) {
+        return Err(WorldsError::AlreadyExists(name.to_string()).into());
+    }
+
+    polyio::rename(&from, &to)
+        .await
+        .map_err(|err| WorldsError::Rename(err.to_string()))?;
+
+    Ok(())
+}
+
+#[tracing::instrument(level = "debug", skip(cluster), fields(cluster_id = cluster.id))]
+pub async fn duplicate_world(cluster: &Cluster, world: &str, name: &str) -> ClusterResult<()> {
+    let from = world_dir(cluster, world)?;
+    let to = world_save_dir(cluster, name)?;
+
+    if from == to || world_folder_exists(cluster, name) {
+        return Err(WorldsError::AlreadyExists(name.to_string()).into());
+    }
+
+    polyio::create_dir_all(&to)
+        .await
+        .map_err(|err| WorldsError::Duplicate(err.to_string()))?;
+    polyio::copy_dir(&from, &to, &[])
+        .await
+        .map_err(|err| WorldsError::Duplicate(err.to_string()))?;
+
+    Ok(())
 }
 
 #[tracing::instrument(level = "debug", skip(cluster), fields(cluster_id = cluster.id))]
@@ -323,4 +375,159 @@ fn strip_formatting(text: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::OnceLock;
+
+    use oneclient_common::domain::GameLoader;
+    use oneclient_common::paths::set_data_dir;
+    use oneclient_db::models::ClusterKind;
+
+    use crate::cluster::Cluster;
+    use crate::error::ClusterError;
+    use crate::stage::ClusterStage;
+
+    use super::*;
+
+    static TEST_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+    fn test_root() -> &'static Path {
+        TEST_DIR.get_or_init(|| {
+            let dir = std::env::temp_dir().join(format!(
+                "oneclient-worlds-{}-{:?}",
+                std::process::id(),
+                std::time::SystemTime::now()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            set_data_dir(dir.clone());
+            dir
+        })
+    }
+
+    fn cluster() -> Cluster {
+        Cluster {
+            id: 1,
+            name: "worlds-test".to_string(),
+            folder_name: "alpha".to_string(),
+            setting_profile_name: None,
+            mc_version: "1.20.1".to_string(),
+            mc_loader: GameLoader::Vanilla,
+            mc_loader_version: None,
+            stage: ClusterStage::Ready,
+            created_at: None,
+            last_played: None,
+            overall_played: Default::default(),
+            linked_modpack_hash: None,
+            kind: ClusterKind::Vanilla,
+            user_created: true,
+            description: None,
+            tags: Vec::new(),
+            cover_path: None,
+        }
+    }
+
+    fn saves_dir() -> PathBuf {
+        test_root().join("clusters/alpha/saves")
+    }
+
+    fn seed_world(name: &str) -> PathBuf {
+        let dir = saves_dir().join(name);
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        std::fs::write(dir.join(LEVEL_DAT), b"level").unwrap();
+        std::fs::write(dir.join(WORLD_ICON), b"png").unwrap();
+        std::fs::write(dir.join("data/region.dat"), b"regions").unwrap();
+        dir
+    }
+
+    fn sorted_world_names(cluster: &Cluster) -> Vec<String> {
+        let mut names: Vec<String> = list_cluster_worlds(cluster)
+            .unwrap()
+            .into_iter()
+            .map(|w| w.folder_name)
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn rename_moves_the_world_folder_into_a_new_name() {
+        let root = test_root();
+        std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
+        let seed = seed_world("alpha_world");
+        let cluster = cluster();
+
+        rename_world(&cluster, "alpha_world", "beta_world")
+            .await
+            .expect("rename succeeds");
+
+        assert!(!seed.is_dir());
+        let renamed = saves_dir().join("beta_world");
+        assert!(renamed.is_dir());
+        assert!(renamed.join(LEVEL_DAT).is_file());
+        assert!(renamed.join("data/region.dat").is_file());
+
+        assert_eq!(sorted_world_names(&cluster), vec!["beta_world".to_string()]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn duplicate_copies_the_world_folder_under_a_new_name() {
+        let root = test_root();
+        std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
+        let _seed = seed_world("dup_world");
+        let cluster = cluster();
+
+        duplicate_world(&cluster, "dup_world", "dup_world_copy")
+            .await
+            .expect("duplicate succeeds");
+
+        let copy = saves_dir().join("dup_world_copy");
+        assert!(copy.is_dir());
+        assert_eq!(std::fs::read(copy.join(LEVEL_DAT)).unwrap(), b"level");
+        assert_eq!(
+            std::fs::read(copy.join("data/region.dat")).unwrap(),
+            b"regions"
+        );
+
+        assert_eq!(
+            sorted_world_names(&cluster),
+            vec!["dup_world".to_string(), "dup_world_copy".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn rename_and_duplicate_refuse_existing_or_invalid_targets() {
+        let root = test_root();
+        std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
+        seed_world("first");
+        seed_world("second");
+        let cluster = cluster();
+
+        assert!(matches!(
+            rename_world(&cluster, "first", "second").await,
+            Err(ClusterError::Worlds(WorldsError::AlreadyExists(_)))
+        ));
+        assert!(matches!(
+            rename_world(&cluster, "first", "a/b").await,
+            Err(ClusterError::Worlds(WorldsError::InvalidName(_)))
+        ));
+        assert!(matches!(
+            rename_world(&cluster, "missing", "other").await,
+            Err(ClusterError::Worlds(WorldsError::NotFound(_)))
+        ));
+        assert!(matches!(
+            duplicate_world(&cluster, "first", "second").await,
+            Err(ClusterError::Worlds(WorldsError::AlreadyExists(_)))
+        ));
+
+        rename_world(&cluster, "first", "first")
+            .await
+            .expect("renaming to the current name is a no-op");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

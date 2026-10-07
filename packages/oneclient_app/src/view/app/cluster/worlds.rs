@@ -1,17 +1,19 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 
 use freya::prelude::*;
 use freya::router::RouterContext;
-use oneclient_core::WorldInfo;
+use oneclient_core::{LauncherError, WorldInfo};
 
 use crate::components::{
-    CARD_BG, CARD_NAME, CardLayout, ContextMenu, IconType, kebab_button, meta_size, meta_text,
-    on_secondary,
+    Button, CARD_BG, CARD_NAME, CardLayout, ContextMenu, Icon, IconType, TextInput, kebab_button,
+    meta_size, meta_text, on_secondary,
 };
 use crate::hooks::{
-    delete_world, query_is_loading, spawn_world_task, try_cluster_worlds, try_world_size,
-    use_cluster, use_cluster_worlds, use_datapack_world, use_dispatch, use_saves_folder_watch,
-    use_view_state, use_world_size,
+    delete_world, duplicate_world, query_is_loading, rename_world, spawn_world_task,
+    try_cluster_worlds, try_world_size, use_cluster, use_cluster_worlds, use_datapack_world,
+    use_dispatch, use_saves_folder_watch, use_view_state, use_world_size,
 };
 use crate::layout::cluster_content;
 use crate::routes::Route;
@@ -21,8 +23,8 @@ use crate::utils::format_size;
 
 use super::cluster_not_found;
 use super::folder_list::{
-    CardIcon, RowHeights, card_icon, confirm_dialog, content_box, folder_button, layout_toggle,
-    matches_search, notify_in_use, search_input, supports_datapacks, toolbar_panel,
+    CardIcon, RowHeights, card_icon, confirm_dialog, content_box, dialog, folder_button,
+    layout_toggle, matches_search, notify_in_use, search_input, supports_datapacks, toolbar_panel,
     use_game_folder_in_use,
 };
 use super::package_manager::{empty_hint, empty_shell, empty_title};
@@ -42,6 +44,12 @@ const WORLD_ROWS: RowHeights = RowHeights {
 #[derive(PartialEq)]
 pub struct ClusterWorlds {
     pub cluster_id: i64,
+}
+
+#[derive(Clone)]
+enum WorldOp {
+    Rename { world: String },
+    Duplicate { world: String },
 }
 
 fn open_datapacks(cluster_id: i64, world: String, mut remembered: State<HashMap<i64, String>>) {
@@ -67,6 +75,8 @@ impl Component for ClusterWorlds {
         let layout = use_view_state("cluster.worlds").layout;
         let mut menu = use_state(|| None::<(f32, f32, WorldInfo)>);
         let mut pending_delete = use_state(|| None::<String>);
+        let mut prompt = use_state(|| None::<WorldOp>);
+        let mut name_text = use_state(String::new);
 
         let Some(cluster) = cluster else {
             return cluster_not_found();
@@ -130,6 +140,8 @@ impl Component for ClusterWorlds {
         let menu_overlay = menu.read().clone().map(|(x, y, info)| {
             let open_world = info.folder_name.clone();
             let target_world = info.folder_name.clone();
+            let rename_src = info.folder_name.clone();
+            let duplicate_src = info.folder_name.clone();
             let path = info.path.clone();
             let mut context = ContextMenu::new(x, y).title(info.folder_name.clone());
             if datapacks {
@@ -140,6 +152,17 @@ impl Component for ClusterWorlds {
             context
                 .action(IconType::Folder, "Open folder", move |()| {
                     crate::platform::open_path(&path.to_string_lossy())
+                })
+                .action(IconType::Pencil01, "Rename\u{2026}", move |()| {
+                    prompt.set(Some(WorldOp::Rename {
+                        world: rename_src.clone(),
+                    }));
+                    name_text.set(rename_src.clone());
+                })
+                .action(IconType::Copy01, "Duplicate\u{2026}", move |()| {
+                    let src = duplicate_src.clone();
+                    prompt.set(Some(WorldOp::Duplicate { world: src.clone() }));
+                    name_text.set(format!("{src} (copy)"));
                 })
                 .separator()
                 .danger_action(IconType::Trash01, "Delete", {
@@ -185,6 +208,103 @@ impl Component for ClusterWorlds {
             )
         });
 
+        let prompt_overlay = prompt.read().clone().map(|op| {
+            let is_rename = matches!(op, WorldOp::Rename { .. });
+            let original = match &op {
+                WorldOp::Rename { world } | WorldOp::Duplicate { world } => world.clone(),
+            };
+            let current = name_text.read().clone();
+            let trimmed = current.trim();
+            let safe = !trimmed.is_empty() && !trimmed.contains(&['/', '\\'][..]);
+            let enabled = safe && !(is_rename && trimmed == original);
+
+            let title = if is_rename {
+                "Rename world"
+            } else {
+                "Duplicate world"
+            };
+            let body = if is_rename {
+                "The world folder is renamed on disk. World links inside the instance that point at this folder will need updating."
+            } else {
+                "A full copy of the world folder is created under the new name."
+            };
+
+            let op_for_task = op.clone();
+            let close = move || prompt.set(None);
+            let mut cancel = close;
+            let mut confirm = {
+                let dispatch = dispatch.clone();
+                move || {
+                    prompt.set(None);
+                    if in_use {
+                        notify_in_use(&dispatch, "Worlds");
+                        return;
+                    }
+                    let target = match &op_for_task {
+                        WorldOp::Rename { world } | WorldOp::Duplicate { world } => {
+                            world.clone()
+                        }
+                    };
+                    let name = name_text.read().clone().trim().to_string();
+                    let task: Pin<Box<dyn Future<Output = Result<(), LauncherError>> + 'static>> =
+                        match &op_for_task {
+                            WorldOp::Rename { .. } => Box::pin(rename_world(
+                                cluster_id,
+                                target,
+                                name,
+                            )),
+                            WorldOp::Duplicate { .. } => Box::pin(duplicate_world(
+                                cluster_id,
+                                target,
+                                name,
+                            )),
+                        };
+                    spawn_world_task(
+                        dispatch.clone(),
+                        if is_rename {
+                            "Couldn't rename world"
+                        } else {
+                            "Couldn't duplicate world"
+                        },
+                        task,
+                    );
+                }
+            };
+
+            dialog(
+                title.to_string(),
+                body.to_string(),
+                Some(
+                    TextInput::new(name_text)
+                        .placeholder(if is_rename { "World name" } else { "Copy name" })
+                        .width(Size::fill())
+                        .into_element(),
+                ),
+                close,
+                [
+                    Button::new()
+                        .secondary()
+                        .on_press(move |_| cancel())
+                        .text("Cancel")
+                        .into_element(),
+                    Button::new()
+                        .primary()
+                        .on_press(move |_| confirm())
+                        .disabled(!enabled)
+                        .child(
+                            Icon::new(if is_rename {
+                                IconType::Pencil01
+                            } else {
+                                IconType::Copy01
+                            })
+                            .size(14.),
+                        )
+                        .text(if is_rename { "Rename" } else { "Duplicate" })
+                        .into_element(),
+                ],
+            )
+        });
+
         cluster_content()
             .child(toolbar_panel(None, controls))
             .child(content_box(
@@ -200,6 +320,7 @@ impl Component for ClusterWorlds {
             ))
             .maybe_child(menu_overlay)
             .maybe_child(confirm_overlay)
+            .maybe_child(prompt_overlay)
             .into_element()
     }
 }

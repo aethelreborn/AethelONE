@@ -183,6 +183,34 @@ pub async fn delete_world(cluster_id: i64, world: String) -> Result<(), Launcher
     result
 }
 
+pub async fn rename_world(
+    cluster_id: i64,
+    world: String,
+    name: String,
+) -> Result<(), LauncherError> {
+    let state = crate::launcher::state()?;
+    let cluster = state.clusters.get(cluster_id).await?;
+    let result = oneclient_core::rename_world(&cluster, &world, &name).await;
+    QueriesStorage::<ClusterWorldsQuery>::invalidate_all().await;
+    QueriesStorage::<WorldSizeQuery>::invalidate_matching(WorldSizeKeys { cluster_id, world })
+        .await;
+    Ok(result?)
+}
+
+pub async fn duplicate_world(
+    cluster_id: i64,
+    world: String,
+    name: String,
+) -> Result<(), LauncherError> {
+    let state = crate::launcher::state()?;
+    let cluster = state.clusters.get(cluster_id).await?;
+    let result = oneclient_core::duplicate_world(&cluster, &world, &name).await;
+    QueriesStorage::<ClusterWorldsQuery>::invalidate_all().await;
+    QueriesStorage::<WorldSizeQuery>::invalidate_matching(WorldSizeKeys { cluster_id, world })
+        .await;
+    Ok(result?)
+}
+
 pub async fn delete_world_datapack(
     cluster_id: i64,
     world: String,

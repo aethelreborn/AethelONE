@@ -50,7 +50,8 @@ pub use oneclient_cluster::screenshots::{
 };
 pub use oneclient_cluster::worlds::{
     DataPackInfo, LEVEL_DAT, PackIcon, WORLD_ICON, WorldInfo, WorldsError, add_world_datapacks,
-    delete_world, delete_world_datapack, list_cluster_worlds, list_world_datapacks, world_size,
+    delete_world, delete_world_datapack, duplicate_world, list_cluster_worlds,
+    list_world_datapacks, rename_world, world_size,
 };
 pub use oneclient_content::bundles::{
     ApplyBundleUpdatesResult, Bundle, BundleArchive, BundleError, BundleFile, BundleFileKind,
