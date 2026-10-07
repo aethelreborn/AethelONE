@@ -7,8 +7,8 @@ use freya::router::RouterContext;
 use oneclient_core::{LauncherError, WorldInfo};
 
 use crate::components::{
-    Button, CARD_BG, CARD_NAME, CardLayout, ContextMenu, Icon, IconType, TextInput, kebab_button,
-    meta_size, meta_text, on_secondary,
+    Button, CARD_BG, CARD_NAME, CardLayout, ContextMenu, Icon, IconType, Segment, SegmentedControl,
+    TextInput, kebab_button, meta_size, meta_text, on_secondary,
 };
 use crate::hooks::{
     Actions, backup_world, delete_world, duplicate_world, import_world_zip, query_is_loading,
@@ -28,6 +28,12 @@ use super::folder_list::{
     layout_toggle, matches_search, notify_in_use, search_input, supports_datapacks, toolbar_panel,
     use_game_folder_in_use,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorldSort {
+    Recent,
+    Name,
+}
 use super::package_manager::{empty_hint, empty_shell, empty_title};
 
 const LIST_ICON: f32 = 44.;
@@ -120,6 +126,7 @@ impl Component for ClusterWorlds {
         let remembered = use_datapack_world();
         let search = use_state(String::new);
         let layout = use_view_state("cluster.worlds").layout;
+        let sort = use_state(|| WorldSort::Recent);
         let mut menu = use_state(|| None::<(f32, f32, WorldInfo)>);
         let mut pending_delete = use_state(|| None::<String>);
         let mut prompt = use_state(|| None::<WorldOp>);
@@ -133,11 +140,18 @@ impl Component for ClusterWorlds {
 
         let all = try_cluster_worlds(&query).unwrap_or_default();
         let needle = search.read().trim().to_lowercase();
-        let worlds: Vec<WorldInfo> = all
+        let mut worlds: Vec<WorldInfo> = all
             .iter()
             .filter(|w| matches_search(&needle, &[&w.folder_name]))
             .cloned()
             .collect();
+        if matches!(*sort.read(), WorldSort::Name) {
+            worlds.sort_by(|a, b| {
+                a.folder_name
+                    .to_lowercase()
+                    .cmp(&b.folder_name.to_lowercase())
+            });
+        }
         let card_layout = CardLayout::from(*layout.read());
 
         let row = {
@@ -251,6 +265,14 @@ impl Component for ClusterWorlds {
                 .into_element(),
         );
         controls.push(layout_toggle(layout));
+        controls.push(
+            SegmentedControl::new(sort)
+                .height(34.)
+                .equal_width(64.)
+                .segment(Segment::new(WorldSort::Recent).label("Recent"))
+                .segment(Segment::new(WorldSort::Name).label("Name"))
+                .into_element(),
+        );
 
         let menu_overlay = menu.read().clone().map(|(x, y, info)| {
             let open_world = info.folder_name.clone();
