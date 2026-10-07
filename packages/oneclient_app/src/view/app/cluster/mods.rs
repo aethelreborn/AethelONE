@@ -5,15 +5,16 @@ use freya::prelude::*;
 use oneclient_content::packages::ContentType;
 
 use crate::hooks::{
-    bundle_overrides_map, bundles_with_status_items, cluster_content_items, stale_hashes,
-    use_bundle_overrides, use_bundles_with_status, use_cluster_content, use_mods_folder_sync,
-    use_package_updates, use_shadowed_mods,
+    bundle_overrides_map, bundles_with_status_items, cluster_content_items, package_updates,
+    stale_hashes, use_bundle_overrides, use_bundles_with_status, use_cluster_content,
+    use_mods_folder_sync, use_package_updates, use_shadowed_mods,
 };
 use crate::layout::cluster_content;
 
 use super::cluster_not_found;
+
 use super::package_manager::{
-    PackageManager, bundle_categories, bundle_packages, use_content_meta,
+    PackageManager, bundle_categories, bundle_packages, stale_page_updates, use_content_meta,
 };
 use crate::hooks::use_cluster;
 
@@ -52,7 +53,7 @@ impl Component for ClusterMods {
                 .as_ref()
                 .is_some_and(|hash| shadowed.contains(hash));
         }
-
+        let update_all = stale_page_updates(&items, &package_updates(&updates));
         cluster_content()
             .child(ModsFolderSync {
                 cluster_id: self.cluster_id,
@@ -68,6 +69,7 @@ impl Component for ClusterMods {
                     items,
                     all_categories,
                     oneclient_common::paths::cluster_mods_dir(&cluster.folder_name).ok(),
+                    update_all,
                 )
                 .into_element(),
             )

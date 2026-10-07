@@ -278,6 +278,8 @@ pub(super) fn toolbar_bar(
     mut toolbar_width: State<f32>,
     bulk: &Bulk,
     open_folder: Option<PathBuf>,
+    dispatch: crate::hooks::Actions,
+    update_all: Vec<oneclient_core::BrowserPackageUpdate>,
 ) -> impl IntoElement {
     let chips = tabs.iter().enumerate().map(|(i, tab)| {
         let mut active = active;
@@ -360,6 +362,26 @@ pub(super) fn toolbar_bar(
             .text("Add Content")
             .into_element(),
     );
+    if !update_all.is_empty() {
+        let count = update_all.len();
+        controls.push(
+            Button::new()
+                .height(Size::px(34.))
+                .font_size(12.)
+                .on_press({
+                    let updates = update_all.clone();
+                    let dispatch = dispatch.clone();
+                    move |_| {
+                        for update in &updates {
+                            dispatch.apply_package_update(update.clone());
+                        }
+                    }
+                })
+                .child(Icon::new(IconType::DownloadCloud02).size(15.))
+                .text(format!("Update all ({count})"))
+                .into_element(),
+        );
+    }
     let controls = if bulk.active() {
         bulk.controls()
     } else {

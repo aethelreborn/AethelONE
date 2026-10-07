@@ -5,7 +5,8 @@ use freya::prelude::*;
 use oneclient_common::search::{MatchScore, SearchQuery};
 use oneclient_content::packages::{CachedPackageMeta, ContentType, ProviderId};
 use oneclient_core::{
-    BundleFileKind, BundleFileType, BundleWithUpdateStatus, FileUpdateStatus, LinkedArtifactInfo,
+    BrowserPackageUpdate, BundleFileKind, BundleFileType, BundleWithUpdateStatus, FileUpdateStatus,
+    LinkedArtifactInfo,
 };
 use oneclient_db::models::OverrideType;
 
@@ -15,8 +16,9 @@ use crate::components::{
 };
 use crate::hooks::{
     ClusterAction, EssentialGuardKind, PendingEssential, disable_warnings, package_meta_batch,
-    use_cluster_mutation, use_disable_warnings, use_essential_guard, use_game_snapshot,
-    use_package_meta_batch, use_selection, use_settings_snapshot, use_view_state,
+    use_cluster_mutation, use_disable_warnings, use_dispatch, use_essential_guard,
+    use_game_snapshot, use_package_meta_batch, use_selection, use_settings_snapshot,
+    use_view_state,
 };
 
 use super::folder_list::confirm_dialog;
@@ -499,6 +501,22 @@ pub struct PackageManager {
     items: Vec<PackageEntry>,
     categories: Vec<String>,
     open_folder: Option<PathBuf>,
+    update_all: Vec<BrowserPackageUpdate>,
+}
+
+pub(super) fn stale_page_updates(
+    items: &[PackageEntry],
+    updates: &[BrowserPackageUpdate],
+) -> Vec<BrowserPackageUpdate> {
+    updates
+        .iter()
+        .filter(|update| {
+            items
+                .iter()
+                .any(|item| item.hash.as_deref() == Some(update.hash.as_str()))
+        })
+        .cloned()
+        .collect()
 }
 
 impl PackageManager {
@@ -511,6 +529,7 @@ impl PackageManager {
         items: Vec<PackageEntry>,
         categories: Vec<String>,
         open_folder: Option<PathBuf>,
+        update_all: Vec<BrowserPackageUpdate>,
     ) -> Self {
         Self {
             title,
@@ -521,6 +540,7 @@ impl PackageManager {
             items,
             categories,
             open_folder,
+            update_all,
         }
     }
 }
@@ -759,6 +779,7 @@ impl Component for PackageManager {
             )
         });
 
+        let dispatch = use_dispatch();
         selection
             .track_modifiers(rect())
             .vertical()
@@ -780,6 +801,8 @@ impl Component for PackageManager {
                 toolbar_width,
                 &bulk,
                 self.open_folder.clone(),
+                dispatch,
+                self.update_all.clone(),
             ))
             .child(
                 ContentBox::new(

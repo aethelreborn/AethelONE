@@ -2,15 +2,16 @@ use freya::prelude::*;
 use oneclient_content::packages::ContentType;
 
 use crate::hooks::{
-    bundle_overrides_map, bundles_with_status_items, cluster_content_items, stale_hashes,
-    use_bundle_overrides, use_bundles_with_status, use_cluster_content, use_package_updates,
+    bundle_overrides_map, bundles_with_status_items, cluster_content_items, package_updates,
+    stale_hashes, use_bundle_overrides, use_bundles_with_status, use_cluster_content,
+    use_package_updates,
 };
 use crate::layout::cluster_content;
 
 use super::cluster_not_found;
 use super::folder_list::content_folder;
 use super::package_manager::{
-    PackageManager, bundle_categories, bundle_packages, use_content_meta,
+    PackageManager, bundle_categories, bundle_packages, stale_page_updates, use_content_meta,
 };
 use crate::hooks::use_cluster;
 
@@ -42,6 +43,7 @@ impl Component for ClusterTextures {
             &stale_hashes(&updates),
             ContentType::ResourcePack,
         );
+        let update_all = stale_page_updates(&items, &package_updates(&updates));
 
         cluster_content()
             .child(
@@ -54,6 +56,7 @@ impl Component for ClusterTextures {
                     items,
                     all_categories,
                     content_folder(&cluster, ContentType::ResourcePack),
+                    update_all,
                 )
                 .into_element(),
             )
