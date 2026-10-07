@@ -13,8 +13,8 @@ use crate::components::{
 use crate::hooks::{
     Actions, backup_world, delete_world, duplicate_world, import_world_zip, query_is_loading,
     rename_world, spawn_world_task, try_cluster_worlds, try_world_size, use_cluster,
-    use_cluster_worlds, use_datapack_world, use_dispatch, use_saves_folder_watch, use_view_state,
-    use_world_size,
+    use_cluster_worlds, use_datapack_world, use_dispatch, use_saves_folder_watch, use_selection,
+    use_view_state, use_world_size,
 };
 use crate::layout::cluster_content;
 use crate::routes::Route;
@@ -128,9 +128,10 @@ impl Component for ClusterWorlds {
         let layout = use_view_state("cluster.worlds").layout;
         let sort = use_state(|| WorldSort::Recent);
         let mut menu = use_state(|| None::<(f32, f32, WorldInfo)>);
-        let mut pending_delete = use_state(|| None::<String>);
+        let mut pending_delete = use_state(|| None::<Vec<String>>);
         let mut prompt = use_state(|| None::<WorldOp>);
         let mut name_text = use_state(String::new);
+        let selection = use_selection::<String>();
 
         let Some(cluster) = cluster else {
             return cluster_not_found();
@@ -153,21 +154,37 @@ impl Component for ClusterWorlds {
             });
         }
         let card_layout = CardLayout::from(*layout.read());
+        let order: Vec<String> = worlds.iter().map(|w| w.folder_name.clone()).collect();
+        let selecting = selection.is_active();
+        let selected: Vec<String> = if selecting {
+            selection.selected_in(&order)
+        } else {
+            Vec::new()
+        };
 
         let row = {
             let worlds = worlds.clone();
+            let order = order.clone();
             move |i: usize| {
                 let info = worlds[i].clone();
-                let press_world = info.folder_name.clone();
+                let key = info.folder_name.clone();
+                let click_key = key.clone();
+                let select_order = order.clone();
                 let menu_info = info.clone();
+                let on_press = if selecting || selection.modifier_held() {
+                    Some((move |()| selection.click(click_key.clone(), &select_order)).into())
+                } else {
+                    let press_key = key.clone();
+                    datapacks.then(|| {
+                        (move |()| open_datapacks(cluster_id, press_key.clone(), remembered)).into()
+                    })
+                };
                 WorldCard {
                     cluster_id,
                     info,
                     layout: card_layout,
-                    on_press: datapacks.then(|| {
-                        (move |()| open_datapacks(cluster_id, press_world.clone(), remembered))
-                            .into()
-                    }),
+                    selected: selection.is_selected(&key),
+                    on_press,
                     on_context: (move |(x, y)| menu.set(Some((x, y, menu_info.clone())))).into(),
                 }
                 .into_element()
@@ -195,182 +212,355 @@ impl Component for ClusterWorlds {
         };
 
         let mut controls = vec![search_input(search)];
-        controls.extend(saves.map(folder_button));
-        let all_names: Vec<String> = all.iter().map(|w| w.folder_name.clone()).collect();
-        controls.push(
-            Button::new()
-                .secondary()
-                .tooltip("Back up every world as its own .zip file")
-                .disabled(all.is_empty())
-                .on_press({
-                    let dispatch = dispatch.clone();
-                    let names = all_names.clone();
-                    move |_| {
-                        if in_use {
-                            notify_in_use(&dispatch, "Worlds");
-                            return;
-                        }
-                        let dispatch = dispatch.clone();
-                        let names = names.clone();
-                        spawn_forever(async move {
-                            let Some(dir) = rfd::AsyncFileDialog::new()
-                                .set_title("Back up all worlds")
-                                .pick_folder()
-                                .await
-                            else {
-                                return;
-                            };
-                            let dir = dir.path().to_path_buf();
-                            let mut ok = 0usize;
-                            let mut failures = 0usize;
-                            for name in &names {
-                                let dest = dir.join(format!("{name}.zip"));
-                                match backup_world(cluster_id, name.clone(), dest).await {
-                                    Ok(()) => ok += 1,
-                                    Err(_) => failures += 1,
-                                }
-                            }
-                            if failures == 0 && ok > 0 {
-                                dispatch
-                                    .notify("Worlds backed up")
-                                    .body(format!("{ok} worlds saved as .zip files."))
-                                    .info()
-                                    .icon(IconType::FolderCheck)
-                                    .toast_only()
-                                    .send();
-                            } else {
-                                dispatch
-                                    .notify("Couldn't back up all worlds")
-                                    .body(format!("{failures} of {} worlds failed.", ok + failures))
-                                    .error()
-                                    .send();
-                            }
-                        });
-                    }
-                })
-                .child(Icon::new(IconType::FolderDownload).size(14.))
-                .text("Back up all")
-                .into_element(),
-        );
-        controls.push(
-            Button::new()
-                .secondary()
-                .tooltip("Import a world from a .zip file")
-                .on_press({
-                    let dispatch = dispatch.clone();
-                    move |_| spawn_import_world(dispatch.clone(), cluster_id, in_use)
-                })
-                .child(Icon::new(IconType::FilePlus02).size(14.))
-                .text("Import world")
-                .into_element(),
-        );
-        controls.push(layout_toggle(layout));
-        controls.push(
-            SegmentedControl::new(sort)
-                .height(34.)
-                .equal_width(64.)
-                .segment(Segment::new(WorldSort::Recent).label("Recent"))
-                .segment(Segment::new(WorldSort::Name).label("Name"))
-                .into_element(),
-        );
-
-        let menu_overlay = menu.read().clone().map(|(x, y, info)| {
-            let open_world = info.folder_name.clone();
-            let target_world = info.folder_name.clone();
-            let rename_src = info.folder_name.clone();
-            let duplicate_src = info.folder_name.clone();
-            let path = info.path.clone();
-            let mut context = ContextMenu::new(x, y).title(info.folder_name.clone());
-            if datapacks {
-                context = context.action(IconType::Database01, "Data packs", move |()| {
-                    open_datapacks(cluster_id, open_world.clone(), remembered)
-                });
+        if selecting {
+            let count = selected.len();
+            let every = !order.is_empty() && count == order.len();
+            controls.push(
+                label()
+                    .text(format!("{count} selected"))
+                    .font_size(12.)
+                    .color(colors::fg_secondary())
+                    .into_element(),
+            );
+            controls.push(
+                Button::new()
+                    .secondary()
+                    .small()
+                    .on_press({
+                        let order = order.clone();
+                        move |_| selection.toggle_all(&order)
+                    })
+                    .text(if every { "Unselect all" } else { "Select all" })
+                    .into_element(),
+            );
+            if count > 0 && !every {
+                controls.push(
+                    Button::new()
+                        .ghost()
+                        .small()
+                        .on_press(move |_| selection.clear())
+                        .text("Deselect all")
+                        .into_element(),
+                );
             }
-            context
-                .action(IconType::Folder, "Open folder", move |()| {
-                    crate::platform::open_path(&path.to_string_lossy())
-                })
-                .action(IconType::Pencil01, "Rename\u{2026}", move |()| {
-                    prompt.set(Some(WorldOp::Rename {
-                        world: rename_src.clone(),
-                    }));
-                    name_text.set(rename_src.clone());
-                })
-                .action(IconType::Copy01, "Duplicate\u{2026}", move |()| {
-                    let src = duplicate_src.clone();
-                    prompt.set(Some(WorldOp::Duplicate { world: src.clone() }));
-                    name_text.set(format!("{src} (copy)"));
-                })
-                .action(IconType::Download01, "Backup as\u{2026}", {
-                    let dispatch = dispatch.clone();
-                    let backup_src = info.folder_name.clone();
-                    move |()| {
-                        if in_use {
-                            notify_in_use(&dispatch, "Worlds");
-                            return;
-                        }
-                        let backup_src = backup_src.clone();
+            controls.push(
+                Button::new()
+                    .secondary()
+                    .small()
+                    .tooltip("Back up the selected worlds as .zip files")
+                    .enabled(count > 0)
+                    .on_press({
                         let dispatch = dispatch.clone();
-                        spawn_forever(async move {
-                            let Some(file) = rfd::AsyncFileDialog::new()
-                                .set_title(format!("Back up {backup_src}"))
-                                .add_filter("World backup", &["zip"])
-                                .set_file_name(format!("{backup_src}.zip"))
-                                .save_file()
-                                .await
-                            else {
+                        let names = selected.clone();
+                        move |_| {
+                            if in_use {
+                                notify_in_use(&dispatch, "Worlds");
                                 return;
-                            };
-                            let dest = file.path().to_path_buf();
-                            match backup_world(cluster_id, backup_src.clone(), dest).await {
-                                Ok(()) => {
+                            }
+                            let dispatch = dispatch.clone();
+                            let names = names.clone();
+                            spawn_forever(async move {
+                                let Some(dir) = rfd::AsyncFileDialog::new()
+                                    .set_title("Back up selected worlds")
+                                    .pick_folder()
+                                    .await
+                                else {
+                                    return;
+                                };
+                                let dir = dir.path().to_path_buf();
+                                let mut ok = 0usize;
+                                let mut failures = 0usize;
+                                for name in &names {
+                                    let dest = dir.join(format!("{name}.zip"));
+                                    match backup_world(cluster_id, name.clone(), dest).await {
+                                        Ok(()) => ok += 1,
+                                        Err(_) => failures += 1,
+                                    }
+                                }
+                                selection.exit();
+                                if failures == 0 && ok > 0 {
                                     dispatch
-                                        .notify("World backed up")
-                                        .body(format!("{backup_src} was saved as a .zip."))
+                                        .notify("Worlds backed up")
+                                        .body(format!("{ok} worlds saved as .zip files."))
                                         .info()
-                                        .icon(IconType::DownloadCloud02)
+                                        .icon(IconType::FolderCheck)
                                         .toast_only()
                                         .send();
-                                }
-                                Err(err) => {
+                                } else {
                                     dispatch
-                                        .notify("Couldn't back up world")
-                                        .body(err.to_string())
+                                        .notify("Couldn't back up the selected worlds")
+                                        .body(format!(
+                                            "{failures} of {} worlds failed.",
+                                            ok + failures
+                                        ))
                                         .error()
                                         .send();
                                 }
-                            }
-                        });
-                    }
-                })
-                .action(IconType::FilePlus02, "Restore from backup\u{2026}", {
-                    let dispatch = dispatch.clone();
-                    move |()| spawn_import_world(dispatch.clone(), cluster_id, in_use)
-                })
-                .separator()
-                .danger_action(IconType::Trash01, "Delete", {
-                    let dispatch = dispatch.clone();
-                    move |()| {
-                        if in_use {
-                            notify_in_use(&dispatch, "Worlds");
-                        } else {
-                            pending_delete.set(Some(target_world.clone()));
+                            });
                         }
-                    }
-                })
-                .on_close(move |_| menu.set(None))
-                .into_element()
+                    })
+                    .child(Icon::new(IconType::FolderDownload).size(14.))
+                    .text(format!("Back up ({count})"))
+                    .into_element(),
+            );
+            controls.push(
+                Button::new()
+                    .danger()
+                    .small()
+                    .enabled(count > 0)
+                    .on_press({
+                        let names = selected.clone();
+                        move |_| pending_delete.set(Some(names.clone()))
+                    })
+                    .child(Icon::new(IconType::Trash01).size(14.))
+                    .text(format!("Delete ({count})"))
+                    .into_element(),
+            );
+            controls.push(
+                Button::new()
+                    .ghost()
+                    .small()
+                    .on_press(move |_| selection.exit())
+                    .text("Cancel")
+                    .into_element(),
+            );
+        } else {
+            controls.extend(saves.map(folder_button));
+            let all_names: Vec<String> = all.iter().map(|w| w.folder_name.clone()).collect();
+            controls.push(
+                Button::new()
+                    .secondary()
+                    .tooltip("Back up every world as its own .zip file")
+                    .disabled(all.is_empty())
+                    .on_press({
+                        let dispatch = dispatch.clone();
+                        let names = all_names.clone();
+                        move |_| {
+                            if in_use {
+                                notify_in_use(&dispatch, "Worlds");
+                                return;
+                            }
+                            let dispatch = dispatch.clone();
+                            let names = names.clone();
+                            spawn_forever(async move {
+                                let Some(dir) = rfd::AsyncFileDialog::new()
+                                    .set_title("Back up all worlds")
+                                    .pick_folder()
+                                    .await
+                                else {
+                                    return;
+                                };
+                                let dir = dir.path().to_path_buf();
+                                let mut ok = 0usize;
+                                let mut failures = 0usize;
+                                for name in &names {
+                                    let dest = dir.join(format!("{name}.zip"));
+                                    match backup_world(cluster_id, name.clone(), dest).await {
+                                        Ok(()) => ok += 1,
+                                        Err(_) => failures += 1,
+                                    }
+                                }
+                                if failures == 0 && ok > 0 {
+                                    dispatch
+                                        .notify("Worlds backed up")
+                                        .body(format!("{ok} worlds saved as .zip files."))
+                                        .info()
+                                        .icon(IconType::FolderCheck)
+                                        .toast_only()
+                                        .send();
+                                } else {
+                                    dispatch
+                                        .notify("Couldn't back up all worlds")
+                                        .body(format!(
+                                            "{failures} of {} worlds failed.",
+                                            ok + failures
+                                        ))
+                                        .error()
+                                        .send();
+                                }
+                            });
+                        }
+                    })
+                    .child(Icon::new(IconType::FolderDownload).size(14.))
+                    .text("Back up all")
+                    .into_element(),
+            );
+            controls.push(
+                Button::new()
+                    .secondary()
+                    .tooltip("Import a world from a .zip file")
+                    .on_press({
+                        let dispatch = dispatch.clone();
+                        move |_| spawn_import_world(dispatch.clone(), cluster_id, in_use)
+                    })
+                    .child(Icon::new(IconType::FilePlus02).size(14.))
+                    .text("Import world")
+                    .into_element(),
+            );
+            controls.push(layout_toggle(layout));
+            controls.push(
+                SegmentedControl::new(sort)
+                    .height(34.)
+                    .equal_width(64.)
+                    .segment(Segment::new(WorldSort::Recent).label("Recent"))
+                    .segment(Segment::new(WorldSort::Name).label("Name"))
+                    .into_element(),
+            );
+            controls.push(
+                Button::new()
+                    .secondary()
+                    .tooltip("Select multiple worlds to back up or delete at once")
+                    .enabled(!order.is_empty())
+                    .on_press(move |_| selection.enter())
+                    .child(Icon::new(IconType::Pencil01).size(14.))
+                    .text("Select")
+                    .into_element(),
+            );
+        }
+
+        let menu_overlay = menu.read().clone().map(|(x, y, info)| {
+            if selecting {
+                let key = info.folder_name.clone();
+                let count = selected.len();
+                let every = !order.is_empty() && count == order.len();
+                let (own_icon, own_text) = if selection.is_selected(&key) {
+                    (IconType::XClose, "Unselect")
+                } else {
+                    (IconType::Check, "Select")
+                };
+                let (all_icon, all_text) = if every {
+                    (IconType::XClose, "Unselect all")
+                } else {
+                    (IconType::Check, "Select all")
+                };
+                let mut select_menu = ContextMenu::new(x, y)
+                    .title(format!("{count} selected"))
+                    .action(own_icon, own_text, {
+                        let key = key.clone();
+                        move |()| selection.toggle(key.clone())
+                    })
+                    .separator()
+                    .action(all_icon, all_text, {
+                        let order = order.clone();
+                        move |()| selection.toggle_all(&order)
+                    });
+                if count > 0 && !every {
+                    select_menu =
+                        select_menu.action(IconType::XClose, "Clear selection", move |()| {
+                            selection.clear()
+                        });
+                }
+                select_menu.on_close(move |_| menu.set(None)).into_element()
+            } else {
+                let open_world = info.folder_name.clone();
+                let target_world = info.folder_name.clone();
+                let rename_src = info.folder_name.clone();
+                let duplicate_src = info.folder_name.clone();
+                let path = info.path.clone();
+                let mut context = ContextMenu::new(x, y).title(info.folder_name.clone());
+                if datapacks {
+                    context = context.action(IconType::Database01, "Data packs", move |()| {
+                        open_datapacks(cluster_id, open_world.clone(), remembered)
+                    });
+                }
+                context
+                    .action(IconType::Folder, "Open folder", move |()| {
+                        crate::platform::open_path(&path.to_string_lossy())
+                    })
+                    .action(IconType::Pencil01, "Rename\u{2026}", move |()| {
+                        prompt.set(Some(WorldOp::Rename {
+                            world: rename_src.clone(),
+                        }));
+                        name_text.set(rename_src.clone());
+                    })
+                    .action(IconType::Copy01, "Duplicate\u{2026}", move |()| {
+                        let src = duplicate_src.clone();
+                        prompt.set(Some(WorldOp::Duplicate { world: src.clone() }));
+                        name_text.set(format!("{src} (copy)"));
+                    })
+                    .action(IconType::Download01, "Backup as\u{2026}", {
+                        let dispatch = dispatch.clone();
+                        let backup_src = info.folder_name.clone();
+                        move |()| {
+                            if in_use {
+                                notify_in_use(&dispatch, "Worlds");
+                                return;
+                            }
+                            let backup_src = backup_src.clone();
+                            let dispatch = dispatch.clone();
+                            spawn_forever(async move {
+                                let Some(file) = rfd::AsyncFileDialog::new()
+                                    .set_title(format!("Back up {backup_src}"))
+                                    .add_filter("World backup", &["zip"])
+                                    .set_file_name(format!("{backup_src}.zip"))
+                                    .save_file()
+                                    .await
+                                else {
+                                    return;
+                                };
+                                let dest = file.path().to_path_buf();
+                                match backup_world(cluster_id, backup_src.clone(), dest).await {
+                                    Ok(()) => {
+                                        dispatch
+                                            .notify("World backed up")
+                                            .body(format!("{backup_src} was saved as a .zip."))
+                                            .info()
+                                            .icon(IconType::DownloadCloud02)
+                                            .toast_only()
+                                            .send();
+                                    }
+                                    Err(err) => {
+                                        dispatch
+                                            .notify("Couldn't back up world")
+                                            .body(err.to_string())
+                                            .error()
+                                            .send();
+                                    }
+                                }
+                            });
+                        }
+                    })
+                    .action(IconType::FilePlus02, "Restore from backup\u{2026}", {
+                        let dispatch = dispatch.clone();
+                        move |()| spawn_import_world(dispatch.clone(), cluster_id, in_use)
+                    })
+                    .separator()
+                    .danger_action(IconType::Trash01, "Delete", {
+                        let dispatch = dispatch.clone();
+                        move |()| {
+                            if in_use {
+                                notify_in_use(&dispatch, "Worlds");
+                            } else {
+                                pending_delete.set(Some(vec![target_world.clone()]));
+                            }
+                        }
+                    })
+                    .on_close(move |_| menu.set(None))
+                    .into_element()
+            }
         });
 
-        let confirm_overlay = pending_delete.read().clone().map(|world| {
-            let target_world = world.clone();
-            let body = if shared {
-                "This version uses the shared game folder, so the world is removed from every version that uses it. It can be restored from your system trash."
+        let confirm_overlay = pending_delete.read().clone().map(|worlds| {
+            let names = worlds.clone();
+            let count = names.len();
+            let body = if count == 1 {
+                if shared {
+                    "This version uses the shared game folder, so the world is removed from every version that uses it. It can be restored from your system trash."
+                } else {
+                    "It can be restored from your system trash."
+                }
+            } else if shared {
+                "These worlds use the shared game folder, so they are removed from every version that uses it. They can be restored from your system trash."
             } else {
-                "It can be restored from your system trash."
+                "They can be restored from your system trash."
+            };
+            let title = if count == 1 {
+                format!("Move \"{}\" to trash?", names[0])
+            } else {
+                format!("Move {count} worlds to trash?")
             };
             confirm_dialog(
-                format!("Move \"{world}\" to trash?"),
+                title,
                 body.to_string(),
                 move || pending_delete.set(None),
                 {
@@ -381,11 +571,15 @@ impl Component for ClusterWorlds {
                             notify_in_use(&dispatch, "Worlds");
                             return;
                         }
-                        spawn_world_task(
-                            dispatch.clone(),
-                            "Couldn't delete world",
-                            delete_world(cluster_id, target_world.clone()),
-                        );
+                        selection.exit();
+                        let names = names.clone();
+                        let task = Box::pin(async move {
+                            for name in &names {
+                                delete_world(cluster_id, name.clone()).await?;
+                            }
+                            Ok(())
+                        });
+                        spawn_world_task(dispatch.clone(), "Couldn't delete some worlds", task);
                     }
                 },
             )
@@ -488,7 +682,8 @@ impl Component for ClusterWorlds {
             )
         });
 
-        cluster_content()
+        selection
+            .track_modifiers(cluster_content())
             .child(toolbar_panel(None, controls))
             .child(content_box(
                 worlds.len(),
@@ -513,6 +708,7 @@ struct WorldCard {
     cluster_id: i64,
     info: WorldInfo,
     layout: CardLayout,
+    selected: bool,
     on_press: Option<EventHandler<()>>,
     on_context: EventHandler<(f32, f32)>,
 }
@@ -521,6 +717,7 @@ impl Component for WorldCard {
     fn render(&self) -> impl IntoElement {
         let mut hovered = use_state(|| false);
         let info = &self.info;
+        let selected = self.selected;
         let grid = self.layout == CardLayout::Grid;
         let size = try_world_size(&use_world_size(self.cluster_id, info.folder_name.clone()));
 
@@ -602,14 +799,18 @@ impl Component for WorldCard {
                 .spacing(11.)
                 .padding(Gaps::new_all(GRID_PAD))
                 .corner_radius(CornerRadius::new_all(6.))
-                .background(if hovering {
+                .background(if selected {
+                    colors::brand().with_a(18)
+                } else if hovering {
                     colors::component_bg_hover()
                 } else {
                     colors::component_bg()
                 })
                 .border(border_all_color(
-                    1.,
-                    if hovering {
+                    if selected { 2. } else { 1. },
+                    if selected {
+                        colors::brand()
+                    } else if hovering {
                         colors::component_border_hover()
                     } else {
                         colors::component_border()
@@ -627,6 +828,14 @@ impl Component for WorldCard {
                 .padding(Gaps::new_all(LIST_PAD))
                 .corner_radius(CornerRadius::new_all(8.))
                 .background(CARD_BG)
+                .border(border_all_color(
+                    if selected { 2. } else { 1. },
+                    if selected {
+                        colors::brand()
+                    } else {
+                        colors::component_border()
+                    },
+                ))
                 .child(icon)
                 .child(text)
                 .child(meta_size(size.unwrap_or_default()))
