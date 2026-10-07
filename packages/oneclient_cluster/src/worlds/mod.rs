@@ -1,8 +1,12 @@
 use std::path::{Component, Path, PathBuf};
 
+use async_zip::tokio::write::ZipFileWriter;
+use async_zip::{Compression, ZipEntryBuilder};
 use chrono::{DateTime, Utc};
+use futures_lite::io::AsyncWriteExt;
 use serde_json::Value;
 use thiserror::Error;
+use tokio::io::{AsyncReadExt, AsyncWrite};
 
 use crate::cluster::Cluster;
 use crate::error::ClusterResult;
@@ -28,6 +32,10 @@ pub enum WorldsError {
     Rename(String),
     #[error("failed to duplicate world: {0}")]
     Duplicate(String),
+    #[error("failed to back up world: {0}")]
+    Backup(String),
+    #[error("failed to restore world: {0}")]
+    Restore(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -187,6 +195,171 @@ pub async fn duplicate_world(cluster: &Cluster, world: &str, name: &str) -> Clus
         .map_err(|err| WorldsError::Duplicate(err.to_string()))?;
 
     Ok(())
+}
+
+/// Zips a world's folder into `dest`, streaming the contents so a large world
+/// never has to fit in memory. Entries sit at the archive root (`level.dat`,
+/// `region/...`) so a backup restores straight into a fresh world folder.
+#[tracing::instrument(level = "debug", skip(cluster), fields(cluster_id = cluster.id))]
+pub async fn backup_world(cluster: &Cluster, world: &str, dest: &Path) -> ClusterResult<()> {
+    let from = world_dir(cluster, world)?;
+
+    if let Some(parent) = dest.parent() {
+        polyio::create_dir_all(parent)
+            .await
+            .map_err(|err| WorldsError::Backup(err.to_string()))?;
+    }
+    if dest.is_file() {
+        polyio::remove_file(dest)
+            .await
+            .map_err(|err| WorldsError::Backup(err.to_string()))?;
+    }
+
+    let file = tokio::fs::File::create(dest)
+        .await
+        .map_err(|err| WorldsError::Backup(err.to_string()))?;
+    let mut writer = ZipFileWriter::with_tokio(file);
+    zip_dir_recursive(&mut writer, "", &from).await?;
+    writer
+        .close()
+        .await
+        .map_err(|err| WorldsError::Backup(err.to_string()))?;
+
+    Ok(())
+}
+
+async fn zip_dir_recursive<W: AsyncWrite + Unpin>(
+    writer: &mut ZipFileWriter<W>,
+    rel: &str,
+    dir: &Path,
+) -> ClusterResult<()> {
+    let mut entries = tokio::fs::read_dir(dir)
+        .await
+        .map_err(|err| WorldsError::Backup(err.to_string()))?;
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|err| WorldsError::Backup(err.to_string()))?
+    {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let file_type = entry
+            .file_type()
+            .await
+            .map_err(|err| WorldsError::Backup(err.to_string()))?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        let rel_path = if rel.is_empty() {
+            name
+        } else {
+            format!("{rel}/{name}")
+        };
+        if file_type.is_dir() {
+            Box::pin(zip_dir_recursive(writer, &rel_path, &entry.path())).await?;
+        } else if file_type.is_file() {
+            let builder = ZipEntryBuilder::new(rel_path.into(), Compression::Deflate);
+            let mut file = tokio::fs::File::open(entry.path())
+                .await
+                .map_err(|err| WorldsError::Backup(err.to_string()))?;
+            let mut entry_writer = writer
+                .write_entry_stream(builder)
+                .await
+                .map_err(|err| WorldsError::Backup(err.to_string()))?;
+            let mut buffer = [0u8; 64 * 1024];
+            loop {
+                let read = file
+                    .read(&mut buffer)
+                    .await
+                    .map_err(|err| WorldsError::Backup(err.to_string()))?;
+                if read == 0 {
+                    break;
+                }
+                entry_writer
+                    .write_all(&buffer[..read])
+                    .await
+                    .map_err(|err| WorldsError::Backup(err.to_string()))?;
+            }
+            entry_writer
+                .close()
+                .await
+                .map_err(|err| WorldsError::Backup(err.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Unpacks a world backup (or any zip containing a world) into the saves
+/// folder under `name`. Archives that carry the world in a single top-level
+/// folder are promoted so `level.dat` ends up at the world root.
+#[tracing::instrument(level = "debug", skip(cluster), fields(cluster_id = cluster.id))]
+pub async fn import_world_zip(cluster: &Cluster, world: &str, zip: &Path) -> ClusterResult<()> {
+    let name = plain_name(world)?;
+    if world_folder_exists(cluster, name) {
+        return Err(WorldsError::AlreadyExists(name.to_string()).into());
+    }
+    if !zip.is_file() {
+        return Err(
+            WorldsError::Restore(format!("backup file not found: {}", zip.display())).into(),
+        );
+    }
+
+    let saves = cluster.game_dir()?.join(SAVES_DIR);
+    let target = saves.join(name);
+    polyio::create_dir_all(&saves)
+        .await
+        .map_err(|err| WorldsError::Restore(err.to_string()))?;
+    polyio::extract_zip(zip, &target)
+        .await
+        .map_err(|err| WorldsError::Restore(err.to_string()))?;
+
+    if !target.join(LEVEL_DAT).is_file() {
+        promote_single_world_folder(&target).await;
+    }
+    if !target.join(LEVEL_DAT).is_file() {
+        let _ = polyio::remove_dir_all(&target).await;
+        return Err(WorldsError::Restore(format!("archive contains no {LEVEL_DAT}")).into());
+    }
+
+    Ok(())
+}
+
+/// Moves a lone nested world folder up into `target` so a zip that wrapped the
+/// world in its own folder still restores cleanly
+async fn promote_single_world_folder(target: &Path) {
+    let mut candidates = Vec::new();
+    let mut extra_files = false;
+
+    if let Ok(mut entries) = tokio::fs::read_dir(target).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let Ok(kind) = entry.file_type().await else {
+                continue;
+            };
+            if kind.is_dir() {
+                if entry.path().join(LEVEL_DAT).is_file() {
+                    candidates.push(entry.path());
+                }
+            } else {
+                extra_files = true;
+            }
+        }
+    }
+
+    if extra_files || candidates.len() != 1 {
+        return;
+    }
+    let Some(root) = candidates.pop() else {
+        return;
+    };
+
+    if let Ok(mut inner) = tokio::fs::read_dir(&root).await {
+        while let Ok(Some(entry)) = inner.next_entry().await {
+            let dest = target.join(entry.file_name());
+            if dest != entry.path() {
+                let _ = polyio::rename(&entry.path(), &dest).await;
+            }
+        }
+    }
+    let _ = polyio::remove_dir_all(&root).await;
 }
 
 #[tracing::instrument(level = "debug", skip(cluster), fields(cluster_id = cluster.id))]
@@ -527,6 +700,98 @@ mod tests {
         rename_world(&cluster, "first", "first")
             .await
             .expect("renaming to the current name is a no-op");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn backup_then_restore_roundtrips_a_world() {
+        let root = test_root();
+        std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
+        seed_world("roundtrip");
+        let cluster = cluster();
+        let zip = root.join("roundtrip.zip");
+
+        backup_world(&cluster, "roundtrip", &zip)
+            .await
+            .expect("backup succeeds");
+        assert!(zip.is_file());
+
+        std::fs::remove_dir_all(saves_dir().join("roundtrip")).unwrap();
+
+        import_world_zip(&cluster, "roundtrip_restored", &zip)
+            .await
+            .expect("restore succeeds");
+
+        let restored = saves_dir().join("roundtrip_restored");
+        assert_eq!(std::fs::read(restored.join(LEVEL_DAT)).unwrap(), b"level");
+        assert_eq!(
+            std::fs::read(restored.join("data/region.dat")).unwrap(),
+            b"regions"
+        );
+        assert!(sorted_world_names(&cluster).contains(&"roundtrip_restored".to_string()));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn restore_refuses_existing_names_and_promotes_a_nested_world_folder() {
+        let root = test_root();
+        std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
+        seed_world("taken");
+        let cluster = cluster();
+        let zip = root.join("taken.zip");
+        backup_world(&cluster, "taken", &zip).await.unwrap();
+
+        assert!(matches!(
+            import_world_zip(&cluster, "taken", &zip).await,
+            Err(ClusterError::Worlds(WorldsError::AlreadyExists(_)))
+        ));
+
+        let nested = root.join("nested.zip");
+        let file = tokio::fs::File::create(&nested).await.unwrap();
+        let mut writer = ZipFileWriter::with_tokio(file);
+        for (name, data) in [
+            ("inner/level.dat", "nested".as_bytes()),
+            ("inner/data/region.dat", "regions".as_bytes()),
+        ] {
+            let builder = ZipEntryBuilder::new(name.to_string().into(), Compression::Deflate);
+            writer.write_entry_whole(builder, data).await.unwrap();
+        }
+        writer.close().await.unwrap();
+
+        import_world_zip(&cluster, "promoted", &nested)
+            .await
+            .expect("nested world zip restores");
+
+        let promoted = saves_dir().join("promoted");
+        assert_eq!(std::fs::read(promoted.join(LEVEL_DAT)).unwrap(), b"nested");
+        assert_eq!(
+            std::fs::read(promoted.join("data/region.dat")).unwrap(),
+            b"regions"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn restore_rejects_an_empty_or_missing_archive() {
+        let root = test_root();
+        std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
+        let cluster = cluster();
+
+        assert!(matches!(
+            import_world_zip(&cluster, "empty", &root.join("no-such.zip")).await,
+            Err(ClusterError::Worlds(WorldsError::Restore(_)))
+        ));
+
+        let empty = root.join("empty.zip");
+        let file = tokio::fs::File::create(&empty).await.unwrap();
+        ZipFileWriter::with_tokio(file).close().await.unwrap();
+        assert!(matches!(
+            import_world_zip(&cluster, "empty", &empty).await,
+            Err(ClusterError::Worlds(WorldsError::Restore(_)))
+        ));
 
         let _ = std::fs::remove_dir_all(root);
     }

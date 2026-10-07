@@ -5000,8 +5000,10 @@ dependencies = [
 name = "oneclient_cluster"
 version = "2.10.0"
 dependencies = [
+ "async_zip",
  "bytes 1.12.1",
  "chrono",
+ "futures-lite",
  "image",
  "oneclient_common",
  "oneclient_db",

@@ -11,9 +11,9 @@ use crate::components::{
     meta_size, meta_text, on_secondary,
 };
 use crate::hooks::{
-    delete_world, duplicate_world, query_is_loading, rename_world, spawn_world_task,
-    try_cluster_worlds, try_world_size, use_cluster, use_cluster_worlds, use_datapack_world,
-    use_dispatch, use_saves_folder_watch, use_view_state, use_world_size,
+    backup_world, delete_world, duplicate_world, import_world_zip, query_is_loading, rename_world,
+    spawn_world_task, try_cluster_worlds, try_world_size, use_cluster, use_cluster_worlds,
+    use_datapack_world, use_dispatch, use_saves_folder_watch, use_view_state, use_world_size,
 };
 use crate::layout::cluster_content;
 use crate::routes::Route;
@@ -50,6 +50,10 @@ pub struct ClusterWorlds {
 enum WorldOp {
     Rename { world: String },
     Duplicate { world: String },
+}
+
+fn world_safe(name: &str) -> bool {
+    !name.is_empty() && !name.contains(&['/', '\\'][..])
 }
 
 fn open_datapacks(cluster_id: i64, world: String, mut remembered: State<HashMap<i64, String>>) {
@@ -163,6 +167,92 @@ impl Component for ClusterWorlds {
                     let src = duplicate_src.clone();
                     prompt.set(Some(WorldOp::Duplicate { world: src.clone() }));
                     name_text.set(format!("{src} (copy)"));
+                })
+                .action(IconType::Download01, "Backup as\u{2026}", {
+                    let dispatch = dispatch.clone();
+                    let backup_src = info.folder_name.clone();
+                    move |()| {
+                        if in_use {
+                            notify_in_use(&dispatch, "Worlds");
+                            return;
+                        }
+                        let backup_src = backup_src.clone();
+                        let dispatch = dispatch.clone();
+                        spawn_forever(async move {
+                            let Some(file) = rfd::AsyncFileDialog::new()
+                                .set_title(format!("Back up {backup_src}"))
+                                .add_filter("World backup", &["zip"])
+                                .set_file_name(format!("{backup_src}.zip"))
+                                .save_file()
+                                .await
+                            else {
+                                return;
+                            };
+                            let dest = file.path().to_path_buf();
+                            match backup_world(cluster_id, backup_src.clone(), dest).await {
+                                Ok(()) => {
+                                    dispatch
+                                        .notify("World backed up")
+                                        .body(format!("{backup_src} was saved as a .zip."))
+                                        .info()
+                                        .icon(IconType::DownloadCloud02)
+                                        .toast_only()
+                                        .send();
+                                }
+                                Err(err) => {
+                                    dispatch
+                                        .notify("Couldn't back up world")
+                                        .body(err.to_string())
+                                        .error()
+                                        .send();
+                                }
+                            }
+                        });
+                    }
+                })
+                .action(IconType::FilePlus02, "Restore from backup\u{2026}", {
+                    let dispatch = dispatch.clone();
+                    move |()| {
+                        if in_use {
+                            notify_in_use(&dispatch, "Worlds");
+                            return;
+                        }
+                        let dispatch = dispatch.clone();
+                        spawn_forever(async move {
+                            let Some(file) = rfd::AsyncFileDialog::new()
+                                .set_title("Restore a world backup")
+                                .add_filter("World backup", &["zip"])
+                                .pick_file()
+                                .await
+                            else {
+                                return;
+                            };
+                            let zip = file.path().to_path_buf();
+                            let name = zip
+                                .file_stem()
+                                .map(|stem| stem.to_string_lossy().to_string())
+                                .filter(|stem| !stem.is_empty() && world_safe(stem))
+                                .unwrap_or_else(|| "restored_world".to_string());
+                            match import_world_zip(cluster_id, name.clone(), zip).await {
+                                Ok(()) => {
+                                    dispatch
+                                        .notify("World restored")
+                                        .body(format!("{name} was restored from the backup."))
+                                        .info()
+                                        .icon(IconType::FolderCheck)
+                                        .toast_only()
+                                        .send();
+                                }
+                                Err(err) => {
+                                    dispatch
+                                        .notify("Couldn't restore world")
+                                        .body(err.to_string())
+                                        .error()
+                                        .send();
+                                }
+                            }
+                        });
+                    }
                 })
                 .separator()
                 .danger_action(IconType::Trash01, "Delete", {

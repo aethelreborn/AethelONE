@@ -19,6 +19,8 @@ oneclient_db.workspace = true
 oneclient_net.workspace = true
 polyio.workspace = true
 
+async_zip.workspace = true
+futures-lite.workspace = true
 tokio.workspace = true
 
 bytes.workspace = true

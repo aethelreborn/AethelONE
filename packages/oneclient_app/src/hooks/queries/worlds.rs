@@ -211,6 +211,30 @@ pub async fn duplicate_world(
     Ok(result?)
 }
 
+pub async fn backup_world(
+    cluster_id: i64,
+    world: String,
+    dest: PathBuf,
+) -> Result<(), LauncherError> {
+    let state = crate::launcher::state()?;
+    let cluster = state.clusters.get(cluster_id).await?;
+    Ok(oneclient_core::backup_world(&cluster, &world, &dest).await?)
+}
+
+pub async fn import_world_zip(
+    cluster_id: i64,
+    world: String,
+    zip: PathBuf,
+) -> Result<(), LauncherError> {
+    let state = crate::launcher::state()?;
+    let cluster = state.clusters.get(cluster_id).await?;
+    let result = oneclient_core::import_world_zip(&cluster, &world, &zip).await;
+    QueriesStorage::<ClusterWorldsQuery>::invalidate_all().await;
+    QueriesStorage::<WorldSizeQuery>::invalidate_matching(WorldSizeKeys { cluster_id, world })
+        .await;
+    Ok(result?)
+}
+
 pub async fn delete_world_datapack(
     cluster_id: i64,
     world: String,
