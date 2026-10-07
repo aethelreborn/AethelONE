@@ -16,7 +16,7 @@ license = "GPL-3.0-only"
 readme = "README.md"
 repository = "https://github.com/aethelreborn/AethelONE"
 rust-version = "1.97"
-version = "2.9.4"
+version = "2.10.0"
 
 [workspace.dependencies]
 # core

@@ -1,3 +1,15 @@
+## 2.10.0 (2026-10-07)
+
+### Features
+
+- Bundle-managed content is now removable behind a new opt-in setting
+
+- Recommended tab surfaces a curated, cluster-aware mod catalog
+
+- Settings gains manual and automatic update controls
+
+- Worlds can now be renamed and duplicated
+
 ## 2.9.4 (2026-10-06)
 
 ### Fixes
