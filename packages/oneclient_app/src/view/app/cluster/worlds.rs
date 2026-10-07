@@ -139,6 +139,62 @@ impl Component for ClusterWorlds {
 
         let mut controls = vec![search_input(search)];
         controls.extend(saves.map(folder_button));
+        let all_names: Vec<String> = all.iter().map(|w| w.folder_name.clone()).collect();
+        controls.push(
+            Button::new()
+                .secondary()
+                .tooltip("Back up every world as its own .zip file")
+                .disabled(all.is_empty())
+                .on_press({
+                    let dispatch = dispatch.clone();
+                    let names = all_names.clone();
+                    move |_| {
+                        if in_use {
+                            notify_in_use(&dispatch, "Worlds");
+                            return;
+                        }
+                        let dispatch = dispatch.clone();
+                        let names = names.clone();
+                        spawn_forever(async move {
+                            let Some(dir) = rfd::AsyncFileDialog::new()
+                                .set_title("Back up all worlds")
+                                .pick_folder()
+                                .await
+                            else {
+                                return;
+                            };
+                            let dir = dir.path().to_path_buf();
+                            let mut ok = 0usize;
+                            let mut failures = 0usize;
+                            for name in &names {
+                                let dest = dir.join(format!("{name}.zip"));
+                                match backup_world(cluster_id, name.clone(), dest).await {
+                                    Ok(()) => ok += 1,
+                                    Err(_) => failures += 1,
+                                }
+                            }
+                            if failures == 0 && ok > 0 {
+                                dispatch
+                                    .notify("Worlds backed up")
+                                    .body(format!("{ok} worlds saved as .zip files."))
+                                    .info()
+                                    .icon(IconType::FolderCheck)
+                                    .toast_only()
+                                    .send();
+                            } else {
+                                dispatch
+                                    .notify("Couldn't back up all worlds")
+                                    .body(format!("{failures} of {} worlds failed.", ok + failures))
+                                    .error()
+                                    .send();
+                            }
+                        });
+                    }
+                })
+                .child(Icon::new(IconType::FolderDownload).size(14.))
+                .text("Back up all")
+                .into_element(),
+        );
         controls.push(layout_toggle(layout));
 
         let menu_overlay = menu.read().clone().map(|(x, y, info)| {
