@@ -918,6 +918,7 @@ mod tests {
             advanced,
             update_available: false,
             shadowed: false,
+            outranked: false,
             seen_status: oneclient_core::SeenStatus::default(),
             essential: None,
         }
