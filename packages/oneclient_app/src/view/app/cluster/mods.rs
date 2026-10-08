@@ -48,10 +48,11 @@ impl Component for ClusterMods {
             ContentType::Mod,
         );
         for item in &mut items {
-            item.shadowed = item
-                .hash
-                .as_ref()
-                .is_some_and(|hash| shadowed.contains(hash));
+            let Some(hash) = &item.hash else {
+                continue;
+            };
+            item.shadowed = shadowed.shadowed.contains(hash);
+            item.outranked = shadowed.outranked.contains(hash);
         }
         let update_all = stale_page_updates(&items, &package_updates(&updates));
         cluster_content()
