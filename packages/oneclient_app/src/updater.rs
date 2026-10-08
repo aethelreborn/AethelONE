@@ -8,7 +8,6 @@ use crate::constants::{RELEASES_URL, UPDATER_ENDPOINT, UPDATER_PUBKEY};
 // Only the Linux package-manager install path builds release URLs itself.
 #[cfg(target_os = "linux")]
 use crate::constants::RELEASES_DOWNLOAD_BASE;
-#[cfg(target_os = "linux")]
 use anyhow::Context;
 
 pub const UPDATE_CHOICE_INSTALL: &str = "update.install";
@@ -93,6 +92,103 @@ fn retry<T>(what: &str, mut attempt: impl FnMut() -> anyhow::Result<T>) -> anyho
         }
     }
     Err(last.expect("the final attempt always reports an error"))
+}
+
+/// Downloads a release asset with stall-tolerant timeouts and verifies the
+/// manifest's minisign signature over the bytes before returning them.
+///
+/// reqwest's default `TCP_USER_TIMEOUT` of 30s on Linux force-closes the
+/// socket when GitHub's CDN stalls a slow connection mid-body, surfacing as
+/// "error decoding response body: operation timed out" - and every retry met
+/// the same wall, which is how self-updates failed on slow links.
+/// cargo-packager-updater builds its own `Client::new()` with no way to widen
+/// that, so the download (and the signature check it would have run) happens
+/// here instead; `Update::install` still performs the actual install.
+fn download_verified(
+    update: &Update,
+    on_chunk: impl Fn(usize, Option<u64>),
+) -> anyhow::Result<Vec<u8>> {
+    let builder = reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(
+            update
+                .timeout
+                .unwrap_or_else(|| std::time::Duration::from_mins(30)),
+        )
+        .user_agent(format!(
+            "AethelONE {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            env!("CARGO_PKG_HOMEPAGE")
+        ));
+
+    // Linux arms this socket option by default at 30s; widen it so a brief
+    // stall is survivable instead of fatal. Other platforms keep their
+    // own defaults.
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    let builder = builder.tcp_user_timeout(std::time::Duration::from_secs(120));
+
+    let client = builder
+        .build()
+        .with_context(|| format!("release client for {}", update.download_url))?;
+
+    let mut headers = update.headers.clone();
+    headers
+        .entry(reqwest::header::ACCEPT)
+        .or_insert_with(|| reqwest::header::HeaderValue::from_static("application/octet-stream"));
+
+    let mut response = client
+        .get(update.download_url.clone())
+        .headers(headers)
+        .send()
+        .with_context(|| format!("failed to request {}", update.download_url))?
+        .error_for_status()
+        .with_context(|| format!("download request for {} was rejected", update.download_url))?;
+
+    let total = response.content_length();
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let read = std::io::Read::read(&mut response, &mut chunk)
+            .with_context(|| format!("downloading {}", update.download_url))?;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        on_chunk(read, total);
+    }
+
+    verify_release_signature(&buffer, &update.signature)?;
+    Ok(buffer)
+}
+
+/// Verifies `data` against the release signature using the updater's pinned
+/// minisign public key. The decode chain (one base64 pass each, legacy
+/// signatures allowed) mirrors cargo-packager-updater's own verification so
+/// every release the crate would accept is accepted here too.
+fn verify_release_signature(data: &[u8], signature: &str) -> anyhow::Result<()> {
+    use base64::Engine as _;
+
+    let engine = base64::engine::general_purpose::STANDARD;
+
+    let pubkey_raw = engine
+        .decode(UPDATER_PUBKEY)
+        .context("updater pubkey must be base64")?;
+    let pubkey = std::str::from_utf8(&pubkey_raw).context("updater pubkey must be utf-8")?;
+    let public_key =
+        minisign_verify::PublicKey::decode(pubkey).context("updater pubkey must decode")?;
+
+    let signature_raw = engine
+        .decode(signature)
+        .context("release signature must be base64")?;
+    let signature =
+        std::str::from_utf8(&signature_raw).context("release signature must be utf-8")?;
+    let signature =
+        minisign_verify::Signature::decode(signature).context("release signature must decode")?;
+
+    public_key
+        .verify(data, &signature, true)
+        .context("release signature verification failed")?;
+    Ok(())
 }
 
 pub fn spawn_update_check(auto_install: bool, events: EventBus) {
@@ -297,22 +393,19 @@ async fn download_and_install(update: Update, events: EventBus) -> anyhow::Resul
             let downloaded = Cell::new(0u64);
             let last_sent = Cell::new(0u64);
 
-            let bytes = update.download_extended(
-                |chunk, total| {
-                    let now = downloaded.get() + chunk as u64;
-                    downloaded.set(now);
-                    let total = total.unwrap_or(0);
+            let bytes = download_verified(&update, |chunk, total| {
+                let now = downloaded.get() + chunk as u64;
+                downloaded.set(now);
+                let total = total.unwrap_or(0);
 
-                    if now == chunk as u64
-                        || (total > 0 && now >= total)
-                        || now - last_sent.get() >= PROGRESS_STEP
-                    {
-                        last_sent.set(now);
-                        events.progress(progress_id, &label, now, total);
-                    }
-                },
-                || {},
-            )?;
+                if now == chunk as u64
+                    || (total > 0 && now >= total)
+                    || now - last_sent.get() >= PROGRESS_STEP
+                {
+                    last_sent.set(now);
+                    events.progress(progress_id, &label, now, total);
+                }
+            })?;
 
             let total = downloaded.get().max(1);
             events.progress(progress_id, &label, total, total);
@@ -465,22 +558,19 @@ fn download_package(
         let downloaded = Cell::new(0u64);
         let last_sent = Cell::new(0u64);
 
-        let bytes = download.download_extended(
-            |chunk, total| {
-                let now = downloaded.get() + chunk as u64;
-                downloaded.set(now);
-                let total = total.unwrap_or(0);
+        let bytes = download_verified(&download, |chunk, total| {
+            let now = downloaded.get() + chunk as u64;
+            downloaded.set(now);
+            let total = total.unwrap_or(0);
 
-                if now == chunk as u64
-                    || (total > 0 && now >= total)
-                    || now - last_sent.get() >= PROGRESS_STEP
-                {
-                    last_sent.set(now);
-                    events.progress(progress_id, label, now, total);
-                }
-            },
-            || {},
-        )?;
+            if now == chunk as u64
+                || (total > 0 && now >= total)
+                || now - last_sent.get() >= PROGRESS_STEP
+            {
+                last_sent.set(now);
+                events.progress(progress_id, label, now, total);
+            }
+        })?;
 
         let total = downloaded.get().max(1);
         events.progress(progress_id, label, total, total);
@@ -570,5 +660,17 @@ fn stderr_suffix(stderr: &[u8]) -> String {
         String::new()
     } else {
         format!(": {stderr}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verify_release_signature;
+
+    #[test]
+    fn release_signature_verification_rejects_garbage_without_panicking() {
+        let err = verify_release_signature(b"payload", "definitely not base64!")
+            .expect_err("a malformed signature must fail verification");
+        assert!(err.to_string().contains("base64"), "got: {err:#}");
     }
 }
