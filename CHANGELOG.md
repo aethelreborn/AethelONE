@@ -1,3 +1,11 @@
+## 2.13.0 (2026-10-09)
+
+### Features
+
+- Right-clicking an instance on the Versions page now offers Export, saving the whole instance folder as a .zip backup you can archive or move to another machine.
+- Running games are now visible where you look: a "Running" badge appears on Home recents and Versions cards while the instance plays, Stop buttons show up next to Launch on the Home hero and Versions sidebar, and double-clicking an instance card launches it.
+- The skins page now has an Equip button directly under the player preview: click a skin in the library and press Equip skin to make it active (the button turns into a disabled "Equipped" state when it already is).
+
 ## 2.12.0 (2026-10-09)
 
 ### Features
