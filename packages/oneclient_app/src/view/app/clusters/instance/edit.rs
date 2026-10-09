@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use freya::prelude::*;
 use oneclient_cluster::naming::{MAX_NAME_CHARS, validate_name};
 use oneclient_common::domain::GameLoader;
-use oneclient_core::clusters::ClusterKind;
+use oneclient_core::clusters::{Cluster, ClusterKind};
 
 use super::details::{DetailsState, details_body};
 use super::rail::{Rail, facts_card, rail, version_art};
@@ -21,6 +21,22 @@ pub struct InstanceFacts {
     pub mc_loader: GameLoader,
     pub kind: ClusterKind,
     pub modpack: bool,
+}
+
+impl InstanceFacts {
+    pub fn from_cluster(cluster: &Cluster) -> Self {
+        Self {
+            cluster_id: cluster.id,
+            name: cluster.name.clone(),
+            description: cluster.description.clone(),
+            tags: cluster.tags.clone(),
+            cover: cluster.cover_file(),
+            mc_version: cluster.mc_version.clone(),
+            mc_loader: cluster.mc_loader,
+            kind: cluster.kind,
+            modpack: cluster.linked_modpack_hash.is_some(),
+        }
+    }
 }
 
 #[derive(PartialEq)]

@@ -73,17 +73,7 @@ impl Component for ClusterSettings {
         let instance_row = {
             InstanceRow {
                 editable: cluster.user_created,
-                facts: InstanceFacts {
-                    cluster_id,
-                    name: cluster.name.clone(),
-                    description: cluster.description.clone(),
-                    tags: cluster.tags.clone(),
-                    cover: cluster.cover_file(),
-                    mc_version: cluster.mc_version.clone(),
-                    mc_loader: cluster.mc_loader,
-                    kind: cluster.kind,
-                    modpack: cluster.linked_modpack_hash.is_some(),
-                },
+                facts: InstanceFacts::from_cluster(&cluster),
             }
             .into_element()
         };

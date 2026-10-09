@@ -25,7 +25,10 @@ use crate::utils::{
     GridSelection, ReleaseLine, default_line, default_loader, default_version_key, format_duration,
     line_title, resolve_cluster, split_clusters,
 };
-use crate::view::app::clusters::CreateInstanceModal;
+use crate::view::app::clusters::{
+    CreateInstanceModal, DeleteInstanceModal, DuplicateInstanceModal, EditInstanceModal,
+    InstanceFacts,
+};
 use crate::view::app::{launch_button_state, launch_syncing};
 
 const PAGE_PADDING: Gaps = Gaps::new(12., 28., 28., 28.);
@@ -85,6 +88,23 @@ impl Sort {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum InstanceAction {
+    Edit(i64),
+    Duplicate(i64),
+    Delete(i64),
+}
+
+impl InstanceAction {
+    fn cluster_id(self) -> i64 {
+        match self {
+            InstanceAction::Edit(id)
+            | InstanceAction::Duplicate(id)
+            | InstanceAction::Delete(id) => id,
+        }
+    }
+}
+
 #[derive(PartialEq)]
 pub struct Clusters;
 
@@ -100,6 +120,7 @@ impl Component for Clusters {
         let loaders = use_state(Vec::<String>::new);
         let sort = use_state(|| Sort::RecentFirst);
         let mut instance_menu = use_state(|| None::<(f32, f32, i64)>);
+        let instance_modal = use_state(|| None::<InstanceAction>);
         let dispatch = use_dispatch();
         let layout = use_view_state("clusters").layout;
         let mut body_width =
@@ -417,7 +438,13 @@ impl Component for Clusters {
                     )
                     .child(sidebar),
             )
-            .maybe_child(instance_menu_overlay(instance_menu, &clusters, dispatch))
+            .maybe_child(instance_menu_overlay(
+                instance_menu,
+                instance_modal,
+                &clusters,
+                dispatch,
+            ))
+            .maybe_child(instance_action_modal(instance_modal, &clusters))
             .maybe_child(create_modal(show_create))
     }
 }
@@ -430,6 +457,7 @@ fn create_modal(mut show_create: State<bool>) -> Option<Element> {
 
 fn instance_menu_overlay(
     mut menu: State<Option<(f32, f32, i64)>>,
+    mut instance_modal: State<Option<InstanceAction>>,
     clusters: &[Cluster],
     dispatch: crate::Actions,
 ) -> Option<Element> {
@@ -474,7 +502,44 @@ fn instance_menu_overlay(
             }
         });
     }
+    if cluster.user_created {
+        context = context.action(IconType::Pencil01, "Edit", move |()| {
+            instance_modal.set(Some(InstanceAction::Edit(id)))
+        });
+        context = context.action(IconType::Copy01, "Duplicate", move |()| {
+            instance_modal.set(Some(InstanceAction::Duplicate(id)))
+        });
+    }
+    context = context.danger_action(IconType::Trash01, "Delete", move |()| {
+        instance_modal.set(Some(InstanceAction::Delete(id)))
+    });
     Some(context.into_element())
+}
+
+fn instance_action_modal(
+    mut modal: State<Option<InstanceAction>>,
+    clusters: &[Cluster],
+) -> Option<Element> {
+    let action = (*modal.read())?;
+    let cluster = clusters.iter().find(|c| c.id == action.cluster_id())?;
+    Some(match action {
+        InstanceAction::Edit(_) => {
+            EditInstanceModal::new(InstanceFacts::from_cluster(cluster), move |()| {
+                modal.set(None)
+            })
+            .into_element()
+        }
+        InstanceAction::Duplicate(_) => {
+            DuplicateInstanceModal::new(InstanceFacts::from_cluster(cluster), move |()| {
+                modal.set(None)
+            })
+            .into_element()
+        }
+        InstanceAction::Delete(_) => {
+            DeleteInstanceModal::new(cluster.id, cluster.name.clone(), move |()| modal.set(None))
+                .into_element()
+        }
+    })
 }
 
 fn shown<'a>(
