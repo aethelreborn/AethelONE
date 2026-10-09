@@ -1,3 +1,14 @@
+## 2.12.0 (2026-10-09)
+
+### Features
+
+- Right-clicking an instance on the Versions page now opens a context menu with quick navigation (Overview, Logs, Screenshots, Mods, Shaders, Textures, Settings), Open folder and Copy path, plus Edit, Duplicate and Delete actions.
+
+### Fixes
+
+- Bound all upstream requests made by the local cosmetics proxy (15s total per request, 15s websocket handshake) so a stalled backend can no longer hang the game's cosmetics screen, and serve the cached cosmetic catalog from disk instantly while revalidating it in the background.
+- SkyBlock content installed without asking is removed from 26.3 clusters once, and turning an optional bundle down removes its mods
+
 ## 2.11.1 (2026-10-09)
 
 ### Fixes
