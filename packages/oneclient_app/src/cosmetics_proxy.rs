@@ -57,6 +57,13 @@ const UPSTREAM: &str = oneclient_common::constants::PLUS_BACKEND_URL;
 /// token upstream would refuse.
 const LOCAL_TOKEN_PREFIX: &str = "oneclient-local.";
 const CATALOG_TTL: Duration = Duration::from_secs(600);
+/// Total budget for one upstream round-trip (request + response body). The mod
+/// gives the proxy a 30s socket timeout, so a stalled backend has to surface
+/// here first, as an error the pipeline can handle, instead of leaving the
+/// game's cosmetics screen waiting on a response that never arrives.
+const FORWARD_TIMEOUT: Duration = Duration::from_secs(15);
+/// Budget for the upstream websocket handshake (connect + `101` response).
+const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
 const WS_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -65,6 +72,7 @@ static STARTED: OnceLock<()> = OnceLock::new();
 static STATE: LazyLock<ProxyState> = LazyLock::new(ProxyState::load);
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(build_forward_client);
 static SEED_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+static CATALOG_REFRESHING: AtomicBool = AtomicBool::new(false);
 
 // ---------------------------------------------------------------- state
 
@@ -166,6 +174,7 @@ fn build_forward_client() -> reqwest::Client {
     match reqwest::Client::builder()
         .tcp_keepalive(Some(Duration::from_secs(15)))
         .connect_timeout(Duration::from_secs(10))
+        .timeout(FORWARD_TIMEOUT)
         // follow nothing: the game client receives redirects and handles them
         .redirect(reqwest::redirect::Policy::none())
         .http1_only()
@@ -175,7 +184,10 @@ fn build_forward_client() -> reqwest::Client {
         Ok(client) => client,
         Err(err) => {
             warn!("cosmetics proxy: forward client build failed: {err}");
-            reqwest::Client::new()
+            reqwest::Client::builder()
+                .timeout(FORWARD_TIMEOUT)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
         }
     }
 }
@@ -186,10 +198,21 @@ async fn forward_request(
     headers: &HeaderMap,
     body: Bytes,
 ) -> Result<reqwest::Response, String> {
-    let url = format!("{UPSTREAM}{path_and_query}");
+    forward_to(&CLIENT, UPSTREAM, method, path_and_query, headers, body).await
+}
+
+async fn forward_to(
+    client: &reqwest::Client,
+    base: &str,
+    method: &Method,
+    path_and_query: &str,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Result<reqwest::Response, String> {
+    let url = format!("{base}{path_and_query}");
     let method = reqwest::Method::from_bytes(method.as_str().as_bytes())
         .map_err(|err| err.to_string())?;
-    let mut request = CLIENT.request(method, &url);
+    let mut request = client.request(method, &url);
     for (name, value) in headers {
         if is_hop_by_hop(name.as_str()) {
             continue;
@@ -224,16 +247,55 @@ fn error_json(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
 // ---------------------------------------------------------------- catalog
 
 async fn catalog() -> Result<Value, String> {
+    catalog_from(&CLIENT, UPSTREAM, &catalog_file()).await
+}
+
+async fn catalog_from(
+    client: &reqwest::Client,
+    base: &str,
+    disk: &Option<PathBuf>,
+) -> Result<Value, String> {
     if let Some((fetched_at, value)) = STATE.catalog.read().unwrap().clone()
         && fetched_at.elapsed() < CATALOG_TTL
     {
         return Ok(value);
     }
-    match forward_request(&Method::GET, "/cosmetics", &HeaderMap::new(), Bytes::new()).await {
+    // Answer instantly from the on-disk cache while revalidating behind the
+    // response: the game's locker screen must never wait on a slow backend.
+    if let Some(value) = read_json(disk) {
+        spawn_catalog_refresh(client.clone(), base.to_owned(), disk.clone());
+        return Ok(value);
+    }
+    refresh_catalog(client, base, disk).await
+}
+
+fn spawn_catalog_refresh(client: reqwest::Client, base: String, disk: Option<PathBuf>) {
+    if CATALOG_REFRESHING
+        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    tokio::spawn(async move {
+        if let Err(err) = refresh_catalog(&client, &base, &disk).await {
+            debug!("cosmetics proxy: background catalog refresh failed ({err})");
+        }
+        CATALOG_REFRESHING.store(false, Ordering::Relaxed);
+    });
+}
+
+async fn refresh_catalog(
+    client: &reqwest::Client,
+    base: &str,
+    disk: &Option<PathBuf>,
+) -> Result<Value, String> {
+    match forward_to(client, base, &Method::GET, "/cosmetics", &HeaderMap::new(), Bytes::new())
+        .await
+    {
         Ok(response) if response.status() == 200 => match response.bytes().await {
             Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
                 Ok(value) => {
-                    if let Some(path) = catalog_file() {
+                    if let Some(path) = disk {
                         let _ = std::fs::write(path, &bytes);
                     }
                     *STATE.catalog.write().unwrap() = Some((Instant::now(), value.clone()));
@@ -245,7 +307,7 @@ async fn catalog() -> Result<Value, String> {
         },
         Ok(response) => Err(format!("catalog refresh failed: {}", response.status())),
         Err(err) => {
-            if let Some(value) = read_json(&catalog_file()) {
+            if let Some(value) = read_json(disk) {
                 debug!("cosmetics proxy: using on-disk catalog cache ({err})");
                 *STATE.catalog.write().unwrap() = Some((Instant::now(), value.clone()));
                 Ok(value)
@@ -527,6 +589,15 @@ async fn upstream_ws_connect(
     path_and_query: &str,
     auth: hyper::header::HeaderValue,
 ) -> Result<reqwest_websocket::WebSocket, String> {
+    upstream_ws_connect_to(UPSTREAM, path_and_query, auth, WS_HANDSHAKE_TIMEOUT).await
+}
+
+async fn upstream_ws_connect_to(
+    base: &str,
+    path_and_query: &str,
+    auth: hyper::header::HeaderValue,
+    handshake_timeout: Duration,
+) -> Result<reqwest_websocket::WebSocket, String> {
     let client = reqwest::Client::builder()
         .tcp_keepalive(Some(Duration::from_secs(15)))
         .connect_timeout(Duration::from_secs(10))
@@ -534,16 +605,22 @@ async fn upstream_ws_connect(
         .tls_backend_rustls()
         .build()
         .map_err(|err| err.to_string())?;
-    client
-        .get(format!("{UPSTREAM}{path_and_query}"))
-        .header(hyper::header::AUTHORIZATION, auth)
-        .upgrade()
-        .send()
-        .await
-        .map_err(|err| err.to_string())?
-        .into_websocket()
-        .await
-        .map_err(|err| err.to_string())
+    // Only the handshake is bounded: once the upgrade completes no request
+    // timeout applies, so a healthy long-lived session is never cut off.
+    let handshake = async {
+        let response = client
+            .get(format!("{base}{path_and_query}"))
+            .header(hyper::header::AUTHORIZATION, auth)
+            .upgrade()
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        response.into_websocket().await.map_err(|err| err.to_string())
+    };
+    match tokio::time::timeout(handshake_timeout, handshake).await {
+        Ok(result) => result,
+        Err(_) => Err("upstream ws handshake timed out".to_owned()),
+    }
 }
 
 async fn ws_session(
@@ -1173,5 +1250,91 @@ mod tests {
         assert_eq!(put.status(), 200);
         let value: Value = reqwest::get(&base).await.unwrap().json().await.unwrap();
         assert!(value["equipped"].get("cape").is_none());
+    }
+
+    /// Accepts one connection and then sits on it without ever answering,
+    /// mimicking a backend that ACKs the request but stalls before headers.
+    async fn stall_upstream() -> SocketAddr {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn forward_fails_fast_when_the_upstream_stalls() {
+        let addr = stall_upstream().await;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(300))
+            .build()
+            .unwrap();
+        let started = Instant::now();
+        let result = forward_to(
+            &client,
+            &format!("http://{addr}"),
+            &Method::GET,
+            "/cosmetics",
+            &HeaderMap::new(),
+            Bytes::new(),
+        )
+        .await;
+        let elapsed = started.elapsed();
+        assert!(result.is_err(), "a stalled upstream must surface as an error");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "a stalled upstream must not hang: took {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_answers_from_disk_while_the_upstream_stalls() {
+        let addr = stall_upstream().await;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(300))
+            .build()
+            .unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("oneclient-catalog-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk_path = dir.join("cosmetics_catalog.json");
+        let expected = json!({"cosmetics": [{"id": 7}]});
+        std::fs::write(&disk_path, serde_json::to_vec(&expected).unwrap()).unwrap();
+        let disk = Some(disk_path);
+        *STATE.catalog.write().unwrap() = None;
+        CATALOG_REFRESHING.store(false, Ordering::Relaxed);
+
+        let started = Instant::now();
+        let value = catalog_from(&client, &format!("http://{addr}"), &disk)
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(value, expected, "must serve the on-disk cache");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "disk cache must be served instantly: took {elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn upstream_ws_handshake_times_out_against_a_silent_server() {
+        let addr = stall_upstream().await;
+        let started = Instant::now();
+        let result = upstream_ws_connect_to(
+            &format!("http://{addr}"),
+            "/websocket",
+            hyper::header::HeaderValue::from_static("Bearer probe"),
+            Duration::from_millis(300),
+        )
+        .await;
+        let elapsed = started.elapsed();
+        assert!(result.is_err(), "a silent peer must not complete the handshake");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "the handshake must be bounded: took {elapsed:?}"
+        );
     }
 }
