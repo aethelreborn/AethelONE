@@ -153,6 +153,24 @@ fn cluster_menu_entries(cluster_id: i64) -> [(IconType, &'static str, Route); 7]
     ]
 }
 
+/// Navigation entries for a cluster's context menu, minus the mod tabs when
+/// the instance has no mod loader.
+pub(crate) fn cluster_nav_entries(
+    cluster_id: i64,
+    mod_tabs: bool,
+) -> Vec<(IconType, &'static str, Route)> {
+    cluster_menu_entries(cluster_id)
+        .into_iter()
+        .filter(|(_, _, route)| {
+            mod_tabs
+                || !matches!(
+                    route,
+                    Route::ClusterMods { .. } | Route::ClusterShaders { .. }
+                )
+        })
+        .collect()
+}
+
 struct ClusterCard {
     cluster: Cluster,
     index: usize,
@@ -216,17 +234,7 @@ impl Component for ClusterCard {
                 .open_upwards()
                 .title(title.clone())
                 .on_close(move |_| menu.set(None));
-            for (icon, label, route) in
-                cluster_menu_entries(cluster_id)
-                    .into_iter()
-                    .filter(|(_, _, route)| {
-                        mod_tabs
-                            || !matches!(
-                                route,
-                                Route::ClusterMods { .. } | Route::ClusterShaders { .. }
-                            )
-                    })
-            {
+            for (icon, label, route) in cluster_nav_entries(cluster_id, mod_tabs) {
                 context = context.action(icon, label, move |()| {
                     let _ = RouterContext::get().push(route.clone());
                 });
@@ -626,4 +634,29 @@ fn recent_card_slots_for_width(row_width_px: f32) -> usize {
     let available = row_width_px - MORE_TILE_WIDTH_PX;
     let slot = MIN_CARD_WIDTH_PX + CARD_GAP_PX;
     (available / slot).floor().max(1.0) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nav_entries_hide_mod_tabs_without_a_mod_loader() {
+        let with_mods = cluster_nav_entries(42, true);
+        let without_mods = cluster_nav_entries(42, false);
+        assert_eq!(with_mods.len(), 7);
+        assert_eq!(without_mods.len(), 5);
+        assert!(with_mods.iter().any(|(_, label, _)| *label == "Mods"));
+        assert!(with_mods.iter().any(|(_, label, _)| *label == "Shaders"));
+        assert!(!without_mods.iter().any(|(_, label, _)| *label == "Mods"));
+        assert!(!without_mods.iter().any(|(_, label, _)| *label == "Shaders"));
+        assert!(without_mods.iter().all(|(_, _, route)| !matches!(
+            route,
+            Route::ClusterMods { .. } | Route::ClusterShaders { .. }
+        )));
+        assert!(matches!(
+            &with_mods[0].2,
+            Route::ClusterOverview { cluster_id } if *cluster_id == 42
+        ));
+    }
 }

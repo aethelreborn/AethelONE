@@ -1,7 +1,7 @@
 use freya::prelude::*;
 use oneclient_core::clusters::Cluster;
 
-use crate::components::{ART_PREVIEW_EDGE, DynamicArt};
+use crate::components::{ART_PREVIEW_EDGE, DynamicArt, on_secondary};
 use crate::theme::colors;
 use crate::ui::border_all_color;
 use crate::utils::{GridSelection, ReleaseLine, line_art_key, line_title};
@@ -16,6 +16,7 @@ pub struct VersionCard {
     pub count: usize,
     pub selected: bool,
     pub on_press: EventHandler<Event<PressEventData>>,
+    on_context: Option<EventHandler<(f32, f32)>>,
 }
 
 impl VersionCard {
@@ -35,6 +36,7 @@ impl VersionCard {
             count: clusters.len(),
             selected,
             on_press: on_press.into(),
+            on_context: None,
         }
     }
 
@@ -51,7 +53,14 @@ impl VersionCard {
             count: 1,
             selected,
             on_press: on_press.into(),
+            on_context: None,
         }
+    }
+
+    /// Right-click handler; the payload is the global (x, y) press position.
+    pub fn on_context(mut self, handler: impl Into<EventHandler<(f32, f32)>>) -> Self {
+        self.on_context = Some(handler.into());
+        self
     }
 }
 
@@ -94,7 +103,7 @@ impl Component for VersionCard {
             border_all_color(1., colors::component_border())
         };
 
-        rect()
+        let card = rect()
             .key(self.key)
             .width(Size::fill())
             .height(Size::px(CARD_HEIGHT_PX))
@@ -163,6 +172,12 @@ impl Component for VersionCard {
                             .color(colors::fg_primary()),
                     )
                     .into_element()
-            }))
+            }));
+        match self.on_context.clone() {
+            Some(on_context) => card
+                .on_secondary_down(on_secondary(Some(on_context)))
+                .into_element(),
+            None => card.into_element(),
+        }
     }
 }

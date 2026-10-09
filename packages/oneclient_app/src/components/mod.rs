@@ -112,6 +112,7 @@ pub use pagination::Pagination;
 pub use player_model::PlayerModel;
 pub use progress_track::progress_track;
 pub use recents_row::RecentsRow;
+pub(crate) use recents_row::cluster_nav_entries;
 pub use release_migration_popup::ReleaseMigrationPopup;
 pub use screenshot_viewer::{ScreenshotViewer, screenshot_context_menu};
 pub(crate) use scrollview::corrected_scroll;

@@ -8,9 +8,9 @@ use oneclient_core::clusters::Cluster;
 use oneclient_core::settings::ViewLayout;
 
 use crate::components::{
-    ART_PREVIEW_EDGE, Button, Dropdown, DynamicArt, FilterMenu, FilterOption, Icon, IconType,
-    InstanceRow, ScrollArea, Segment, SegmentedControl, TabBar, TabItem, TextInput, VersionCard,
-    open_folder_button,
+    ART_PREVIEW_EDGE, Button, ContextMenu, Dropdown, DynamicArt, FilterMenu, FilterOption, Icon,
+    IconType, InstanceRow, ScrollArea, Segment, SegmentedControl, TabBar, TabItem, TextInput,
+    VersionCard, cluster_nav_entries, open_folder_button,
 };
 use crate::hooks::{
     settled_or_loading, use_active_cluster_id, use_clusters, use_dispatch, use_game_snapshot,
@@ -99,6 +99,8 @@ impl Component for Clusters {
         let query = use_state(String::new);
         let loaders = use_state(Vec::<String>::new);
         let sort = use_state(|| Sort::RecentFirst);
+        let mut instance_menu = use_state(|| None::<(f32, f32, i64)>);
+        let dispatch = use_dispatch();
         let layout = use_view_state("clusters").layout;
         let mut body_width =
             use_state(|| window_logical_size().width - PAGE_PADDING.left() - PAGE_PADDING.right());
@@ -291,10 +293,17 @@ impl Component for Clusters {
                     let item = GridSelection::Instance(c.id);
                     let is_selected = current == Some(item);
                     let on_press = move |_| selected.set(Some(item));
+                    let id = c.id;
+                    let on_context =
+                        move |pos: (f32, f32)| instance_menu.set(Some((pos.0, pos.1, id)));
                     if grid {
-                        VersionCard::for_instance(c, is_selected, on_press).into_element()
+                        VersionCard::for_instance(c, is_selected, on_press)
+                            .on_context(on_context)
+                            .into_element()
                     } else {
-                        InstanceRow::new(c, is_selected, on_press).into_element()
+                        InstanceRow::new(c, is_selected, on_press)
+                            .on_context(on_context)
+                            .into_element()
                     }
                 })
                 .collect()
@@ -408,6 +417,7 @@ impl Component for Clusters {
                     )
                     .child(sidebar),
             )
+            .maybe_child(instance_menu_overlay(instance_menu, &clusters, dispatch))
             .maybe_child(create_modal(show_create))
     }
 }
@@ -416,6 +426,55 @@ fn create_modal(mut show_create: State<bool>) -> Option<Element> {
     show_create
         .read()
         .then(|| CreateInstanceModal::new(move |()| show_create.set(false)).into_element())
+}
+
+fn instance_menu_overlay(
+    mut menu: State<Option<(f32, f32, i64)>>,
+    clusters: &[Cluster],
+    dispatch: crate::Actions,
+) -> Option<Element> {
+    let (x, y, id) = (*menu.read())?;
+    let cluster = clusters.iter().find(|c| c.id == id)?;
+    let dir = cluster.dir().ok();
+    let mut context = ContextMenu::new(x, y)
+        .open_upwards()
+        .title(cluster.name.clone())
+        .on_close(move |_| menu.set(None));
+    for (icon, label, route) in cluster_nav_entries(id, !cluster.lacks_mod_loader()) {
+        context = context.action(icon, label, move |()| {
+            let _ = RouterContext::get().push(route.clone());
+        });
+    }
+    context = context.separator();
+    if let Some(dir) = dir {
+        let open_dir = dir.clone();
+        context = context.action(IconType::Folder, "Open folder", move |()| {
+            std::fs::create_dir_all(&open_dir).ok();
+            crate::platform::open_path(&open_dir.to_string_lossy());
+        });
+        context = context.action(IconType::Copy01, "Copy path", move |()| {
+            let path = dir.to_string_lossy().to_string();
+            if let Err(err) = freya::text_edit::Clipboard::set(path) {
+                tracing::warn!("clipboard copy failed: {err:?}");
+                dispatch
+                    .clone()
+                    .notify("Copy failed")
+                    .body("Could not copy to the clipboard.")
+                    .error()
+                    .toast_only()
+                    .send();
+            } else {
+                dispatch
+                    .notify("Copied to clipboard")
+                    .body("Instance folder path copied.")
+                    .info()
+                    .icon(IconType::ClipboardCheck)
+                    .toast_only()
+                    .send();
+            }
+        });
+    }
+    Some(context.into_element())
 }
 
 fn shown<'a>(

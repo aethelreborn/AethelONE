@@ -1,7 +1,7 @@
 use freya::prelude::*;
 use oneclient_core::clusters::Cluster;
 
-use crate::components::{ART_PREVIEW_EDGE, DynamicArt};
+use crate::components::{ART_PREVIEW_EDGE, DynamicArt, on_secondary};
 use crate::theme::colors;
 use crate::ui::{border_all_color, last_played_label};
 use crate::utils::{GridSelection, ReleaseLine, line_art_key, line_title};
@@ -17,6 +17,7 @@ pub struct InstanceRow {
     art: DynamicArt,
     selected: bool,
     on_press: EventHandler<Event<PressEventData>>,
+    on_context: Option<EventHandler<(f32, f32)>>,
 }
 
 impl InstanceRow {
@@ -33,6 +34,7 @@ impl InstanceRow {
             art: DynamicArt::for_cluster(cluster).max_edge(ART_PREVIEW_EDGE),
             selected,
             on_press: on_press.into(),
+            on_context: None,
         }
     }
 
@@ -52,7 +54,14 @@ impl InstanceRow {
                 .max_edge(ART_PREVIEW_EDGE),
             selected,
             on_press: on_press.into(),
+            on_context: None,
         }
+    }
+
+    /// Right-click handler; the payload is the global (x, y) press position.
+    pub fn on_context(mut self, handler: impl Into<EventHandler<(f32, f32)>>) -> Self {
+        self.on_context = Some(handler.into());
+        self
     }
 }
 
@@ -95,7 +104,7 @@ impl Component for InstanceRow {
             colors::component_border()
         };
 
-        rect()
+        let card = rect()
             .key(self.key)
             .horizontal()
             .width(Size::fill())
@@ -150,6 +159,12 @@ impl Component for InstanceRow {
                     .font_size(12.)
                     .max_lines(1)
                     .color(colors::fg_secondary()),
-            )
+            );
+        match self.on_context.clone() {
+            Some(on_context) => card
+                .on_secondary_down(on_secondary(Some(on_context)))
+                .into_element(),
+            None => card.into_element(),
+        }
     }
 }
