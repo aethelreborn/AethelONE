@@ -45,6 +45,8 @@ impl Component for AccountSkins {
             .as_deref()
             .and_then(|id| library.read().entry(id).cloned());
         let active_id = library.read().active.clone();
+        let busy_now = *busy.peek();
+        let already_active = selected_id.is_some() && selected_id == active_id;
 
         rect()
             .horizontal()
@@ -58,6 +60,11 @@ impl Component for AccountSkins {
                 account_name,
                 selected_entry.as_ref(),
                 preview.read().clone(),
+                library,
+                selected,
+                status,
+                selected_entry.is_some() && !busy_now,
+                already_active,
             ))
             .child(side_panel(
                 library,
@@ -74,11 +81,17 @@ impl Component for AccountSkins {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn preview_panel(
     account_uuid: Option<String>,
     account_name: Option<String>,
     selected: Option<&SkinEntry>,
     preview: Option<(Bytes, bool)>,
+    library: State<Library>,
+    selected_state: State<Option<String>>,
+    status: State<Option<(String, bool)>>,
+    equip_enabled: bool,
+    already_active: bool,
 ) -> impl IntoElement {
     let mut model = PlayerModel::new(account_uuid.unwrap_or_default());
     if let Some((bytes, slim)) = preview {
@@ -118,7 +131,35 @@ fn preview_panel(
                         .color(colors::fg_primary()),
                 ),
         )
+        .child(
+            Button::new()
+                .variant(ButtonVariant::Primary)
+                .width(Size::fill())
+                .disabled(!equip_enabled || already_active)
+                .text(if already_active { "Equipped" } else { "Equip skin" })
+                .on_press(move |_| {
+                    equip_selected(library, selected_state, status);
+                }),
+        )
         .into_element()
+}
+
+/// Points the library at the selected skin and reports the result. Shared by
+/// the preview panel's Equip button and the library's "Use this skin" button.
+fn equip_selected(
+    mut library: State<Library>,
+    selected: State<Option<String>>,
+    mut status: State<Option<(String, bool)>>,
+) {
+    let Some(id) = selected.read().clone() else {
+        status.set(Some(("Select a skin first".to_string(), true)));
+        return;
+    };
+    library.write().set_active(Some(id));
+    status.set(Some((
+        "Active — offline accounts will wear it in game".to_string(),
+        false,
+    )));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -288,17 +329,7 @@ fn side_panel(
                         .variant(ButtonVariant::Primary)
                         .disabled(!use_enabled)
                         .text("Use this skin")
-                        .on_press(move |_| {
-                            let Some(id) = selected.read().clone() else {
-                                status.set(Some(("Select a skin first".to_string(), true)));
-                                return;
-                            };
-                            library.write().set_active(Some(id));
-                            status.set(Some((
-                                "Active — offline accounts will wear it in game".to_string(),
-                                false,
-                            )));
-                        }),
+                        .on_press(move |_| equip_selected(library, selected, status)),
                 )
                 .child(
                     Button::new()
