@@ -1,3 +1,9 @@
+## 2.11.1 (2026-10-09)
+
+### Fixes
+
+- Fix auto-updates timing out on slow connections
+
 ## 2.11.0 (2026-10-07)
 
 ### Features
