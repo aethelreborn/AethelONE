@@ -13,8 +13,8 @@ use crate::components::{
     VersionCard, cluster_nav_entries, open_folder_button,
 };
 use crate::hooks::{
-    settled_or_loading, use_active_cluster_id, use_clusters, use_dispatch, use_game_snapshot,
-    use_launcher, use_version_metadata, use_view_state,
+    export_instance, settled_or_loading, use_active_cluster_id, use_clusters, use_dispatch,
+    use_game_snapshot, use_launcher, use_version_metadata, use_view_state,
 };
 use crate::routes::Route;
 use crate::theme::colors;
@@ -474,6 +474,44 @@ fn instance_menu_overlay(
         });
     }
     context = context.separator();
+    let export_dispatch = dispatch.clone();
+    let export_title = cluster.name.clone();
+    let export_file = cluster.folder_name.clone();
+    context = context.action(IconType::Download01, "Export\u{2026}", move |()| {
+        let dispatch = export_dispatch.clone();
+        let title = export_title.clone();
+        let file_name = format!("{export_file}.zip");
+        spawn_forever(async move {
+            let Some(file) = rfd::AsyncFileDialog::new()
+                .set_title(format!("Export {title}"))
+                .add_filter("Instance backup", &["zip"])
+                .set_file_name(file_name)
+                .save_file()
+                .await
+            else {
+                return;
+            };
+            let dest = file.path().to_path_buf();
+            match export_instance(id, dest).await {
+                Ok(()) => {
+                    dispatch
+                        .notify("Instance exported")
+                        .body(format!("{title} was saved as a .zip."))
+                        .info()
+                        .icon(IconType::DownloadCloud02)
+                        .toast_only()
+                        .send();
+                }
+                Err(err) => {
+                    dispatch
+                        .notify("Couldn't export instance")
+                        .body(err.to_string())
+                        .error()
+                        .send();
+                }
+            }
+        });
+    });
     if let Some(dir) = dir {
         let open_dir = dir.clone();
         context = context.action(IconType::Folder, "Open folder", move |()| {
@@ -502,6 +540,7 @@ fn instance_menu_overlay(
             }
         });
     }
+    context = context.separator();
     if cluster.user_created {
         context = context.action(IconType::Pencil01, "Edit", move |()| {
             instance_modal.set(Some(InstanceAction::Edit(id)))

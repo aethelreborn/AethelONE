@@ -18,6 +18,8 @@ pub mod naming;
 pub mod profiles;
 pub mod screenshots;
 pub mod worlds;
+pub mod export;
+mod zipwalk;
 
 pub use cluster::{Cluster, ClusterLinkTarget, encode_tags, remove_mods_link};
 pub use error::{ClusterError, ClusterResult};

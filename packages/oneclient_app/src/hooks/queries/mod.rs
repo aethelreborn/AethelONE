@@ -42,9 +42,9 @@ pub use auth::{
     AddOfflineAccountKeys, BeginMicrosoftLoginMutation, CancelMicrosoftLoginKeys,
     CancelMicrosoftLoginMutation, FinishMicrosoftLoginMutation, RefreshAccountKeys,
     RemoveAccountKeys, SetDefaultAccountKeys, UseRefreshAccount, UseRemoveAccount,
-    UseSetDefaultAccount, login_code_already_handled, mutation_error,
-    mutation_is_pending, mutation_is_running, mutation_ok, reset_login_code_dedup, try_account,
-    try_accounts, try_default_account, use_account, use_accounts, use_add_microsoft_account,
+    UseSetDefaultAccount, login_code_already_handled, mutation_error, mutation_is_pending,
+    mutation_is_running, mutation_ok, reset_login_code_dedup, try_account, try_accounts,
+    try_default_account, use_account, use_accounts, use_add_microsoft_account,
     use_add_offline_account, use_begin_microsoft_login, use_cancel_microsoft_login,
     use_current_account, use_default_account, use_finish_microsoft_login, use_refresh_account,
     use_refresh_all_accounts, use_remove_account, use_set_default_account,
@@ -63,7 +63,7 @@ pub use cluster_content::{
     cluster_content_items, use_cluster_content, use_migratable_routes, use_mods_folder_sync,
     use_shadowed_mods,
 };
-pub use clusters::{use_cluster, use_clusters};
+pub use clusters::{export_instance, use_cluster, use_clusters};
 pub use disable_warnings::{DisableWarningsQuery, disable_warnings, use_disable_warnings};
 pub(crate) use folder_watch::use_folder_watch;
 pub use image::{CachedImageQuery, loaded_image, use_cached_image};

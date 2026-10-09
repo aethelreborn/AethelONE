@@ -48,6 +48,7 @@ pub use oneclient_cluster::screenshots::{
     ScreenshotInfo, ScreenshotsError, delete_screenshot, list_cluster_screenshots,
     load_picked_image, load_screenshot,
 };
+pub use oneclient_cluster::export::export_cluster;
 pub use oneclient_cluster::worlds::{
     DataPackInfo, LEVEL_DAT, PackIcon, WORLD_ICON, WorldInfo, WorldsError, add_world_datapacks,
     backup_world, delete_world, delete_world_datapack, duplicate_world, import_world_zip,

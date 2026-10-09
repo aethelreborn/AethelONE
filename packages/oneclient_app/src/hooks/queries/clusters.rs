@@ -29,3 +29,12 @@ pub fn use_cluster(cluster_id: i64) -> Option<Cluster> {
     let clusters = super::state::settled_or_loading(&use_clusters()).unwrap_or_default();
     clusters.into_iter().find(|c| c.id == cluster_id)
 }
+
+pub async fn export_instance(
+    cluster_id: i64,
+    dest: std::path::PathBuf,
+) -> Result<(), LauncherError> {
+    let state = crate::launcher::state()?;
+    let cluster = state.clusters.get(cluster_id).await?;
+    Ok(oneclient_core::export_cluster(&cluster, &dest).await?)
+}

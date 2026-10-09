@@ -1,15 +1,13 @@
 use std::path::{Component, Path, PathBuf};
 
 use async_zip::tokio::write::ZipFileWriter;
-use async_zip::{Compression, ZipEntryBuilder};
 use chrono::{DateTime, Utc};
-use futures_lite::io::AsyncWriteExt;
 use serde_json::Value;
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWrite};
 
 use crate::cluster::Cluster;
 use crate::error::ClusterResult;
+use crate::zipwalk::zip_dir_recursive;
 
 const SAVES_DIR: &str = "saves";
 const DATAPACKS_DIR: &str = "datapacks";
@@ -219,72 +217,14 @@ pub async fn backup_world(cluster: &Cluster, world: &str, dest: &Path) -> Cluste
         .await
         .map_err(|err| WorldsError::Backup(err.to_string()))?;
     let mut writer = ZipFileWriter::with_tokio(file);
-    zip_dir_recursive(&mut writer, "", &from).await?;
+    zip_dir_recursive(&mut writer, "", &from)
+        .await
+        .map_err(WorldsError::Backup)?;
     writer
         .close()
         .await
         .map_err(|err| WorldsError::Backup(err.to_string()))?;
 
-    Ok(())
-}
-
-async fn zip_dir_recursive<W: AsyncWrite + Unpin>(
-    writer: &mut ZipFileWriter<W>,
-    rel: &str,
-    dir: &Path,
-) -> ClusterResult<()> {
-    let mut entries = tokio::fs::read_dir(dir)
-        .await
-        .map_err(|err| WorldsError::Backup(err.to_string()))?;
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|err| WorldsError::Backup(err.to_string()))?
-    {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let file_type = entry
-            .file_type()
-            .await
-            .map_err(|err| WorldsError::Backup(err.to_string()))?;
-        if file_type.is_symlink() {
-            continue;
-        }
-        let rel_path = if rel.is_empty() {
-            name
-        } else {
-            format!("{rel}/{name}")
-        };
-        if file_type.is_dir() {
-            Box::pin(zip_dir_recursive(writer, &rel_path, &entry.path())).await?;
-        } else if file_type.is_file() {
-            let builder = ZipEntryBuilder::new(rel_path.into(), Compression::Deflate);
-            let mut file = tokio::fs::File::open(entry.path())
-                .await
-                .map_err(|err| WorldsError::Backup(err.to_string()))?;
-            let mut entry_writer = writer
-                .write_entry_stream(builder)
-                .await
-                .map_err(|err| WorldsError::Backup(err.to_string()))?;
-            let mut buffer = [0u8; 64 * 1024];
-            loop {
-                let read = file
-                    .read(&mut buffer)
-                    .await
-                    .map_err(|err| WorldsError::Backup(err.to_string()))?;
-                if read == 0 {
-                    break;
-                }
-                entry_writer
-                    .write_all(&buffer[..read])
-                    .await
-                    .map_err(|err| WorldsError::Backup(err.to_string()))?;
-            }
-            entry_writer
-                .close()
-                .await
-                .map_err(|err| WorldsError::Backup(err.to_string()))?;
-        }
-    }
     Ok(())
 }
 
@@ -554,6 +494,7 @@ fn strip_formatting(text: &str) -> String {
 mod tests {
     use std::path::PathBuf;
 
+    use async_zip::{Compression, ZipEntryBuilder};
     use oneclient_common::domain::GameLoader;
     use oneclient_db::models::ClusterKind;
 

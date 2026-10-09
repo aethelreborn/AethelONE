@@ -40,6 +40,9 @@ pub enum ClusterError {
     #[error(transparent)]
     Worlds(#[from] crate::worlds::WorldsError),
 
+    #[error("failed to export instance: {0}")]
+    Export(String),
+
     #[error(transparent)]
     Request(#[from] oneclient_net::RequestError),
 
