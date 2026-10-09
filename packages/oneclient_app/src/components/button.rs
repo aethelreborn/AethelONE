@@ -504,3 +504,21 @@ pub fn copy_button(text: String, copied_body: &'static str, dispatch: crate::Act
         .child(Icon::new(IconType::Copy01).size(14.))
         .text("Copy")
 }
+
+/// Small badge pinned to a card's top-right corner while its game is running.
+pub fn running_pill() -> Element {
+    rect()
+        .position(Position::new_absolute().top(8.).right(8.))
+        .layer(Layer::Relative(8))
+        .padding(Gaps::new_symmetric(4., 8.))
+        .corner_radius(CornerRadius::new_all(6.))
+        .background(Color::from_af32rgb(0.66, 11, 16, 19))
+        .child(
+            label()
+                .text("Running")
+                .font_size(11.)
+                .font_weight(FontWeight::MEDIUM)
+                .color(colors::success()),
+        )
+        .into()
+}

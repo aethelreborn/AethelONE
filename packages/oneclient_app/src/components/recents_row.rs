@@ -9,8 +9,12 @@ use freya::elements::image::{AspectRatio, ImageCover, ImageHandle, image};
 
 use super::dynamic_art::use_art_bytes;
 use super::local_image::decode;
-use crate::components::{ART_PREVIEW_EDGE, ContextMenu, DynamicArt, Icon, IconType, LocalImage};
-use crate::hooks::{settled_or_loading, use_active_cluster_id, use_clusters};
+use crate::components::{
+    ART_PREVIEW_EDGE, ContextMenu, DynamicArt, Icon, IconType, LocalImage, running_pill,
+};
+use crate::hooks::{
+    settled_or_loading, use_active_cluster_id, use_clusters, use_dispatch, use_game_snapshot,
+};
 use crate::motion::use_animations_enabled;
 use crate::routes::Route;
 use crate::theme;
@@ -204,6 +208,8 @@ impl Component for ClusterCard {
         let active = *active_id.read() == Some(self.cluster.id);
         let mut hovering = use_state(|| false);
         let mut menu = use_state(|| None::<(f32, f32)>);
+        let dispatch = use_dispatch();
+        let game = use_game_snapshot();
 
         let a11y_id = use_a11y();
         let focus = use_focus(a11y_id);
@@ -225,8 +231,14 @@ impl Component for ClusterCard {
             .cluster
             .modpack_icon_file()
             .filter(|icon| icon.is_file());
-        let on_press = move |_| {
+        let running = game.is_running(cluster_id);
+        let on_press = move |e: Event<PressEventData>| {
             *active_id.write() = Some(cluster_id);
+            if let PressEventData::Mouse(m) = e.data()
+                && EventsCombos::<()>::pressed(m.global_location).is_double()
+            {
+                dispatch.launch_cluster(cluster_id);
+            }
         };
 
         let menu_overlay = (*menu.read()).map(|(x, y)| {
@@ -366,7 +378,8 @@ impl Component for ClusterCard {
                                     } else {
                                         Color::TRANSPARENT
                                     }),
-                            ),
+                            )
+                            .maybe_child(running.then(running_pill)),
                     ),
             )
             .maybe_child(menu_overlay)

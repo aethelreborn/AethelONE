@@ -1,7 +1,8 @@
 use freya::prelude::*;
 use oneclient_core::clusters::Cluster;
 
-use crate::components::{ART_PREVIEW_EDGE, DynamicArt, on_secondary};
+use crate::components::{ART_PREVIEW_EDGE, DynamicArt, on_secondary, running_pill};
+use crate::hooks::use_game_snapshot;
 use crate::theme::colors;
 use crate::ui::border_all_color;
 use crate::utils::{GridSelection, ReleaseLine, line_art_key, line_title};
@@ -86,6 +87,8 @@ impl Component for VersionCard {
         let hovered = *hovering.read();
         let focused = focus().is_focused();
         let on_press = self.on_press.clone();
+        let game = use_game_snapshot();
+        let running = matches!(self.key, GridSelection::Instance(id) if game.is_running(id));
 
         let art_opacity = if selected {
             1.0
@@ -172,7 +175,8 @@ impl Component for VersionCard {
                             .color(colors::fg_primary()),
                     )
                     .into_element()
-            }));
+            }))
+            .maybe_child(running.then(running_pill));
         match self.on_context.clone() {
             Some(on_context) => card
                 .on_secondary_down(on_secondary(Some(on_context)))

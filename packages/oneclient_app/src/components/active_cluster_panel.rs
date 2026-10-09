@@ -126,9 +126,13 @@ impl Component for ActiveClusterPanel {
                     .margin(Gaps::new(8., 0., 0., 0.))
                     .child(launch_button(
                         cluster_id,
-                        dispatch,
+                        dispatch.clone(),
                         launch_button_state(&game, cluster_id, syncing),
                     ))
+                    .maybe_child(
+                        game.is_running(cluster_id)
+                            .then(|| stop_button(cluster_id, dispatch)),
+                    )
                     .child(cluster_settings_button(cluster_id)),
             )
     }
@@ -153,6 +157,18 @@ fn launch_button(
             }
         })
         .text(label)
+}
+
+fn stop_button(cluster_id: i64, dispatch: crate::Actions) -> impl IntoElement {
+    Button::new()
+        .danger()
+        .medium()
+        .font_size(16.)
+        .font_weight(FontWeight::from(450))
+        .padding(Gaps::new_symmetric(8., 24.))
+        .tooltip("Stop game")
+        .on_press(move |_| dispatch.kill_cluster(cluster_id))
+        .text("Stop")
 }
 
 fn cluster_settings_button(cluster_id: i64) -> impl IntoElement {

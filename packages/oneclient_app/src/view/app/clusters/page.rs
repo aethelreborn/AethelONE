@@ -313,8 +313,16 @@ impl Component for Clusters {
                 .map(|c| {
                     let item = GridSelection::Instance(c.id);
                     let is_selected = current == Some(item);
-                    let on_press = move |_| selected.set(Some(item));
                     let id = c.id;
+                    let launch_dispatch = dispatch.clone();
+                    let on_press = move |e: Event<PressEventData>| {
+                        selected.set(Some(item));
+                        if let PressEventData::Mouse(m) = e.data()
+                            && EventsCombos::<()>::pressed(m.global_location).is_double()
+                        {
+                            launch_dispatch.launch_cluster(id);
+                        }
+                    };
                     let on_context =
                         move |pos: (f32, f32)| instance_menu.set(Some((pos.0, pos.1, id)));
                     if grid {
@@ -959,9 +967,17 @@ impl Component for Sidebar {
                             .spacing(8.)
                             .child(play_button(
                                 cluster_id,
-                                dispatch,
+                                dispatch.clone(),
                                 launch_button_state(&game, cluster_id, syncing),
                             ))
+                            .maybe_child(game.is_running(cluster_id).then(|| {
+                                Button::new()
+                                    .danger()
+                                    .icon()
+                                    .tooltip("Stop game")
+                                    .on_press(move |_| dispatch.kill_cluster(cluster_id))
+                                    .child(Icon::new(IconType::Square).size(16.))
+                            }))
                             .child(
                                 Button::new()
                                     .secondary()
