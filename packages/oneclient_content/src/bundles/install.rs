@@ -219,6 +219,7 @@ pub async fn install_package_from_bundle(
     ctx: &ContentCtx,
 ) -> ContentResult<String> {
     let cluster = PackageStore::get_cluster(cluster_id, ctx).await?;
+    let mirror_manifest = crate::packages::mirror::load(ctx).await;
     let hash = match &file.kind {
         BundleFileKind::Managed {
             provider,
@@ -260,12 +261,13 @@ pub async fn install_package_from_bundle(
         }
     };
 
+    let identity = crate::packages::mirror::expected_identity(mirror_manifest.as_deref(), file);
     bundle_dao::track_bundle_artifact(
         &ctx.db,
         cluster_id,
         &hash,
         bundle_name,
-        &file.kind.bundle_version_id(),
+        &identity.version_id,
         &file.kind.package_id(),
     )
     .await?;

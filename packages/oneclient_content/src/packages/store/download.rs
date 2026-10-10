@@ -52,6 +52,16 @@ pub async fn download_version_file(
     child: Option<&GroupedProgressChild>,
     ctx: &ContentCtx,
 ) -> ContentResult<ArtifactRow> {
+    let mirrored =
+        crate::packages::mirror::rewritten_version_file(ctx, provider, project_id, file).await;
+    let rewritten;
+    let file = if let Some(mirrored) = mirrored {
+        rewritten = mirrored;
+        &rewritten
+    } else {
+        file
+    };
+
     let hash = normalize_hash(&file.sha1);
     if !force && let Some(row) = artifact_dao::get_artifact_by_hash(&ctx.db, &hash).await? {
         let path = artifact_absolute_path(&row.path)?;

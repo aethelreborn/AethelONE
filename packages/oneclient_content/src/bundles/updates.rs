@@ -106,6 +106,7 @@ async fn check_bundle_updates_inner(
     let archives = bundles
         .archives_for(ctx, &cluster.mc_version, loader)
         .await?;
+    let mirror_manifest = crate::packages::mirror::load(ctx).await;
 
     let tracked_bundle_names: HashSet<String> = bundle_packages
         .iter()
@@ -293,14 +294,16 @@ async fn check_bundle_updates_inner(
                 });
         }
 
-        if let Some((resolved_bundle_name, new_version_id, new_file)) = matched_target {
-            if installed_version_id != &new_version_id {
+        if let Some((resolved_bundle_name, _, new_file)) = matched_target {
+            let identity =
+                crate::packages::mirror::expected_identity(mirror_manifest.as_deref(), &new_file);
+            if !identity.matches(installed_version_id, &bundle_pkg.hash) {
                 updates_available.push(BundlePackageUpdate {
                     cluster_id,
                     installed_hash: bundle_pkg.hash.clone(),
                     installed_version_id: installed_version_id.clone(),
                     bundle_name: resolved_bundle_name,
-                    new_version_id,
+                    new_version_id: identity.version_id,
                     new_file,
                 });
             }
@@ -864,6 +867,7 @@ pub async fn get_bundles_with_update_status(
     let archives = bundles
         .archives_for(ctx, &cluster.mc_version, loader)
         .await?;
+    let mirror_manifest = crate::packages::mirror::load(ctx).await;
     let external_ids = external_ids_by_sha1(&archives);
 
     let mut installed_map: HashMap<String, &BundleTrackedArtifactRow> = HashMap::new();
@@ -919,16 +923,17 @@ pub async fn get_bundles_with_update_status(
         let mut has_updates = false;
 
         for file in &archive.manifest.files {
-            let new_version_id = file.kind.bundle_version_id();
+            let identity =
+                crate::packages::mirror::expected_identity(mirror_manifest.as_deref(), file);
             let status = if let Some(installed) = installed_map.get(&file.kind.bundle_key()) {
                 let installed_version = installed.bundle_version_id.as_deref().unwrap_or("");
-                if installed_version == new_version_id {
+                if identity.matches(installed_version, &installed.hash) {
                     FileUpdateStatus::UpToDate
                 } else {
                     has_updates = true;
                     FileUpdateStatus::UpdateAvailable {
                         installed_version_id: installed_version.to_string(),
-                        new_version_id,
+                        new_version_id: identity.version_id,
                     }
                 }
             } else if matches!(

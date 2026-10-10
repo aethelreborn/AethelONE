@@ -18,6 +18,15 @@ pub const TOS_URL: &str = "https://polyfrost.org/legal/terms";
 pub const PRIVACY_URL: &str = "https://polyfrost.org/legal/privacy";
 pub const PLUS_BACKEND_URL: &str = "https://plus.polyfrost.org";
 
+/// Modrinth project id of PolyPlus (shown as "PolyPlus+").
+pub const POLYPLUS_MODRINTH_PROJECT_ID: &str = "Iw9mZi4a";
+/// Rolling manifest of AethelOnePLUS-built PolyPlus jars (cracked-uuid badge
+/// patch) published by the `build.yml` release job. Downloads and bundle
+/// update checks consult it and fall back to the official Modrinth file
+/// whenever it is unreachable or has no entry for the requested mc version.
+pub const POLYPLUS_MIRROR_MANIFEST_URL: &str =
+    "https://github.com/aethelreborn/AethelOnePLUS/releases/latest/download/polyplus-mirror.json";
+
 /// Loopback endpoint of the built-in Poly+ cosmetics proxy
 /// (`oneclient_app::cosmetics_proxy`); the port is what gets bound and what
 /// `-Dpolyplus.apiUrl` points the game at.

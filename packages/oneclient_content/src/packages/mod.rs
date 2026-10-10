@@ -5,6 +5,7 @@ pub mod error;
 pub mod fabric_version;
 pub mod local_manifest;
 pub mod metadata_cache;
+pub mod mirror;
 pub mod provider;
 pub mod release_migration;
 pub mod store;
