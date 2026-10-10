@@ -72,20 +72,29 @@ static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(build_forward_client);
 static SEED_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 static CATALOG_REFRESHING: AtomicBool = AtomicBool::new(false);
 
-/// Custom baby-dragon pet bundle shipped with the launcher. Served straight
-/// from the binary so the mod can download it from the same loopback proxy.
-static CUSTOM_PET_ZIP: &[u8] = include_bytes!("../assets/baby_deathripper.zip");
-static CUSTOM_PET_HASH: LazyLock<String> = LazyLock::new(|| {
+/// Custom baby-dragon pet bundles shipped with the launcher, served straight
+/// from the binary so the mod can download them from the same loopback proxy.
+/// Two variants: one perched on the shoulder (attached cosmetic), one flying
+/// along behind the player (standalone pet entity).
+static CUSTOM_PET_FOLLOW_ZIP: &[u8] = include_bytes!("../assets/baby_deathripper_follow.zip");
+static CUSTOM_PET_SIT_ZIP: &[u8] = include_bytes!("../assets/baby_deathripper_sit.zip");
+
+fn sha1_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha1::new();
-    hasher.update(CUSTOM_PET_ZIP);
+    hasher.update(bytes);
     hasher
         .finalize()
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
-});
+}
+
+static CUSTOM_PET_FOLLOW_HASH: LazyLock<String> = LazyLock::new(|| sha1_hex(CUSTOM_PET_FOLLOW_ZIP));
+static CUSTOM_PET_SIT_HASH: LazyLock<String> = LazyLock::new(|| sha1_hex(CUSTOM_PET_SIT_ZIP));
 const CUSTOM_PET_ID: u64 = 900_001;
-const CUSTOM_PET_PATH: &str = "/custom/baby_deathripper.zip";
+const CUSTOM_PET_FOLLOW_ID: u64 = 900_002;
+const CUSTOM_PET_FOLLOW_PATH: &str = "/custom/baby_deathripper_follow.zip";
+const CUSTOM_PET_SIT_PATH: &str = "/custom/baby_deathripper_sit.zip";
 
 // ---------------------------------------------------------------- state
 
@@ -264,25 +273,46 @@ fn error_json(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
     json_response(status, &json!({ "error": message }))
 }
 
+fn pet_zip_response(zip: &'static [u8]) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/zip")
+        .header("content-length", zip.len())
+        .header(
+            oneclient_common::constants::COSMETICS_PROXY_MARKER,
+            oneclient_common::constants::COSMETICS_PROXY_MARKER_VALUE,
+        )
+        .body(Full::new(Bytes::from_static(zip)))
+        .unwrap_or_else(|_| error_json(StatusCode::INTERNAL_SERVER_ERROR, "pet asset"))
+}
+
 // ---------------------------------------------------------------- catalog
 
 /// Custom pet group injected into every catalog response so the baby dragon
-/// shows up in the locker alongside the official catalog items.
+/// shows up in the locker alongside the official catalog items. The two
+/// variants double as the in-game mode switch: perched on the shoulder or
+/// flying along behind the player (re-equipping a variant swaps modes).
 fn custom_pet_group() -> Value {
+    let base = oneclient_common::constants::COSMETICS_PROXY_URL;
     json!({
         "id": CUSTOM_PET_ID,
         "type": "pet",
         "name": "Baby Deathripper",
         "allowed_slots": ["pet"],
-        "variants": [{
-            "id": CUSTOM_PET_ID,
-            "name": "Yellow",
-            "url": format!(
-                "{}/custom/baby_deathripper.zip",
-                oneclient_common::constants::COSMETICS_PROXY_URL
-            ),
-            "hash": CUSTOM_PET_HASH.as_str(),
-        }],
+        "variants": [
+            {
+                "id": CUSTOM_PET_ID,
+                "name": "Sitting on Shoulder",
+                "url": format!("{base}{CUSTOM_PET_SIT_PATH}"),
+                "hash": CUSTOM_PET_SIT_HASH.as_str(),
+            },
+            {
+                "id": CUSTOM_PET_FOLLOW_ID,
+                "name": "Following Player",
+                "url": format!("{base}{CUSTOM_PET_FOLLOW_PATH}"),
+                "hash": CUSTOM_PET_FOLLOW_HASH.as_str(),
+            },
+        ],
     })
 }
 
@@ -1026,17 +1056,10 @@ async fn handle(
                 StatusCode::OK,
                 &json!({ "proxy": oneclient_common::constants::COSMETICS_PROXY_MARKER_VALUE }),
             )
-        } else if method == Method::GET && path == CUSTOM_PET_PATH {
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("content-type", "application/zip")
-                .header("content-length", CUSTOM_PET_ZIP.len())
-                .header(
-                    oneclient_common::constants::COSMETICS_PROXY_MARKER,
-                    oneclient_common::constants::COSMETICS_PROXY_MARKER_VALUE,
-                )
-                .body(Full::new(Bytes::from_static(CUSTOM_PET_ZIP)))
-                .unwrap_or_else(|_| error_json(StatusCode::INTERNAL_SERVER_ERROR, "pet asset"))
+        } else if method == Method::GET && path == CUSTOM_PET_FOLLOW_PATH {
+            pet_zip_response(CUSTOM_PET_FOLLOW_ZIP)
+        } else if method == Method::GET && path == CUSTOM_PET_SIT_PATH {
+            pet_zip_response(CUSTOM_PET_SIT_ZIP)
         } else if method == Method::GET && path == "/cosmetics" {
             match catalog().await {
                 Ok(value) => json_response(StatusCode::OK, &value),
@@ -1137,19 +1160,48 @@ mod tests {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[1]["id"].as_u64(), Some(CUSTOM_PET_ID));
         assert_eq!(groups[1]["type"].as_str(), Some("pet"));
-        assert_eq!(groups[1]["variants"][0]["id"].as_u64(), Some(CUSTOM_PET_ID));
+        let variants = groups[1]["variants"].as_array().unwrap();
+        assert_eq!(variants.len(), 2);
+        assert_eq!(variants[0]["id"].as_u64(), Some(CUSTOM_PET_ID));
+        assert_eq!(variants[0]["name"].as_str(), Some("Sitting on Shoulder"));
+        assert!(
+            variants[0]["url"]
+                .as_str()
+                .unwrap()
+                .ends_with(CUSTOM_PET_SIT_PATH)
+        );
+        assert_eq!(variants[1]["id"].as_u64(), Some(CUSTOM_PET_FOLLOW_ID));
+        assert_eq!(variants[1]["name"].as_str(), Some("Following Player"));
+        assert!(
+            variants[1]["url"]
+                .as_str()
+                .unwrap()
+                .ends_with(CUSTOM_PET_FOLLOW_PATH)
+        );
         // idempotent: a second pass must not duplicate the group
         let twice = with_custom_pets(injected);
         assert_eq!(twice["cosmetics"].as_array().unwrap().len(), 2);
     }
 
     #[test]
-    fn embedded_pet_asset_is_a_valid_zip() {
-        // PK\x03\x04 local-file-header magic; enough to prove the bundle shipped
-        assert!(CUSTOM_PET_ZIP.len() > 100);
-        assert_eq!(&CUSTOM_PET_ZIP[..2], b"PK");
-        assert!(!CUSTOM_PET_HASH.is_empty());
-        assert_eq!(CUSTOM_PET_HASH.len(), 40);
+    fn embedded_pet_assets_are_valid_zips() {
+        for zip in [CUSTOM_PET_SIT_ZIP, CUSTOM_PET_FOLLOW_ZIP] {
+            // PK\x03\x04 local-file-header magic; enough to prove the bundle shipped
+            assert!(zip.len() > 100);
+            assert_eq!(&zip[..2], b"PK");
+        }
+        for hash in [
+            CUSTOM_PET_SIT_HASH.as_str(),
+            CUSTOM_PET_FOLLOW_HASH.as_str(),
+        ] {
+            assert!(!hash.is_empty());
+            assert_eq!(hash.len(), 40);
+        }
+        // the two bundles must differ (distinct pet.json / geometry offsets)
+        assert_ne!(
+            CUSTOM_PET_SIT_HASH.as_str(),
+            CUSTOM_PET_FOLLOW_HASH.as_str()
+        );
     }
 
     #[test]
