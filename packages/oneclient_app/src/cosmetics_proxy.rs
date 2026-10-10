@@ -36,9 +36,7 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::{
-    HeaderMap, CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, UPGRADE,
-};
+use hyper::header::{CONNECTION, HeaderMap, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, UPGRADE};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
@@ -74,6 +72,21 @@ static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(build_forward_client);
 static SEED_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 static CATALOG_REFRESHING: AtomicBool = AtomicBool::new(false);
 
+/// Custom baby-dragon pet bundle shipped with the launcher. Served straight
+/// from the binary so the mod can download it from the same loopback proxy.
+static CUSTOM_PET_ZIP: &[u8] = include_bytes!("../assets/baby_deathripper.zip");
+static CUSTOM_PET_HASH: LazyLock<String> = LazyLock::new(|| {
+    let mut hasher = Sha1::new();
+    hasher.update(CUSTOM_PET_ZIP);
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+});
+const CUSTOM_PET_ID: u64 = 900_001;
+const CUSTOM_PET_PATH: &str = "/custom/baby_deathripper.zip";
+
 // ---------------------------------------------------------------- state
 
 #[derive(Default)]
@@ -89,11 +102,15 @@ impl ProxyState {
         let state = Self::default();
         if let Some(value) = read_json(&state_file()) {
             if let Some(object) = value.get("equipped").and_then(Value::as_object) {
-                *state.equipped.write().unwrap() = object.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                *state.equipped.write().unwrap() =
+                    object.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             }
             *state.particle_color.write().unwrap() = value.get("particle_color").cloned();
             state.seeded.store(
-                value.get("seeded").and_then(Value::as_bool).unwrap_or(false),
+                value
+                    .get("seeded")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
                 Ordering::Relaxed,
             );
         }
@@ -210,8 +227,8 @@ async fn forward_to(
     body: Bytes,
 ) -> Result<reqwest::Response, String> {
     let url = format!("{base}{path_and_query}");
-    let method = reqwest::Method::from_bytes(method.as_str().as_bytes())
-        .map_err(|err| err.to_string())?;
+    let method =
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).map_err(|err| err.to_string())?;
     let mut request = client.request(method, &url);
     for (name, value) in headers {
         if is_hop_by_hop(name.as_str()) {
@@ -222,7 +239,10 @@ async fn forward_to(
     if !body.is_empty() {
         request = request.body(body);
     }
-    request.send().await.map_err(|err| format!("upstream: {err}"))
+    request
+        .send()
+        .await
+        .map_err(|err| format!("upstream: {err}"))
 }
 
 fn json_response(status: StatusCode, value: &Value) -> Response<Full<Bytes>> {
@@ -246,8 +266,43 @@ fn error_json(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
 
 // ---------------------------------------------------------------- catalog
 
+/// Custom pet group injected into every catalog response so the baby dragon
+/// shows up in the locker alongside the official catalog items.
+fn custom_pet_group() -> Value {
+    json!({
+        "id": CUSTOM_PET_ID,
+        "type": "pet",
+        "name": "Baby Deathripper",
+        "allowed_slots": ["pet"],
+        "variants": [{
+            "id": CUSTOM_PET_ID,
+            "name": "Yellow",
+            "url": format!(
+                "{}/custom/baby_deathripper.zip",
+                oneclient_common::constants::COSMETICS_PROXY_URL
+            ),
+            "hash": CUSTOM_PET_HASH.as_str(),
+        }],
+    })
+}
+
+/// Append the launcher-shipped pet to a catalog document without disturbing
+/// the upstream groups (the disk cache keeps the pristine upstream bytes).
+fn with_custom_pets(mut catalog: Value) -> Value {
+    if let Some(list) = catalog.get_mut("cosmetics").and_then(Value::as_array_mut)
+        && !list
+            .iter()
+            .any(|group| group.get("id").and_then(Value::as_u64) == Some(CUSTOM_PET_ID))
+    {
+        list.push(custom_pet_group());
+    }
+    catalog
+}
+
 async fn catalog() -> Result<Value, String> {
-    catalog_from(&CLIENT, UPSTREAM, &catalog_file()).await
+    catalog_from(&CLIENT, UPSTREAM, &catalog_file())
+        .await
+        .map(with_custom_pets)
 }
 
 async fn catalog_from(
@@ -289,8 +344,15 @@ async fn refresh_catalog(
     base: &str,
     disk: &Option<PathBuf>,
 ) -> Result<Value, String> {
-    match forward_to(client, base, &Method::GET, "/cosmetics", &HeaderMap::new(), Bytes::new())
-        .await
+    match forward_to(
+        client,
+        base,
+        &Method::GET,
+        "/cosmetics",
+        &HeaderMap::new(),
+        Bytes::new(),
+    )
+    .await
     {
         Ok(response) if response.status() == 200 => match response.bytes().await {
             Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
@@ -353,7 +415,8 @@ fn split_catalog(catalog: &Value) -> (Vec<Value>, Vec<Value>) {
 
 async fn seed_from_upstream(headers: &HeaderMap) {
     let result = async {
-        let response = forward_request(&Method::GET, "/cosmetics/player", headers, Bytes::new()).await?;
+        let response =
+            forward_request(&Method::GET, "/cosmetics/player", headers, Bytes::new()).await?;
         if response.status() != 200 {
             return Err(format!("seed status {}", response.status()));
         }
@@ -565,10 +628,7 @@ fn ws_handshake(request: &mut Request<Incoming>) -> Response<Full<Bytes>> {
         .path_and_query()
         .map(|value| value.as_str().to_string())
         .unwrap_or_else(|| "/websocket".to_string());
-    let auth = request
-        .headers()
-        .get(hyper::header::AUTHORIZATION)
-        .cloned();
+    let auth = request.headers().get(hyper::header::AUTHORIZATION).cloned();
     let upgrade = hyper::upgrade::on(&mut *request);
     tokio::spawn(async move {
         match upgrade.await {
@@ -615,7 +675,10 @@ async fn upstream_ws_connect_to(
             .send()
             .await
             .map_err(|err| err.to_string())?;
-        response.into_websocket().await.map_err(|err| err.to_string())
+        response
+            .into_websocket()
+            .await
+            .map_err(|err| err.to_string())
     };
     match tokio::time::timeout(handshake_timeout, handshake).await {
         Ok(result) => result,
@@ -656,10 +719,7 @@ async fn ws_session(
     }
 }
 
-async fn relay_session(
-    mut client: TokioIo<Upgraded>,
-    mut websocket: reqwest_websocket::WebSocket,
-) {
+async fn relay_session(mut client: TokioIo<Upgraded>, mut websocket: reqwest_websocket::WebSocket) {
     let mut assembler = FrameAssembler::default();
     let mut ping = tokio::time::interval(PING_INTERVAL);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -924,7 +984,9 @@ impl FrameAssembler {
                 Ok(Some((opcode, frame.payload)))
             }
             0x0 => {
-                let Some(opcode) = self.opcode.take() else { return Err(()) };
+                let Some(opcode) = self.opcode.take() else {
+                    return Err(());
+                };
                 self.buffer.extend(&frame.payload);
                 if frame.fin {
                     Ok(Some((opcode, std::mem::take(&mut self.buffer))))
@@ -959,13 +1021,27 @@ async fn handle(
     } else {
         let method = request.method().clone();
         let path = request.uri().path().to_string();
-        if method == Method::GET
-            && path == oneclient_common::constants::COSMETICS_PROXY_PROBE
-        {
+        if method == Method::GET && path == oneclient_common::constants::COSMETICS_PROXY_PROBE {
             json_response(
                 StatusCode::OK,
                 &json!({ "proxy": oneclient_common::constants::COSMETICS_PROXY_MARKER_VALUE }),
             )
+        } else if method == Method::GET && path == CUSTOM_PET_PATH {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "application/zip")
+                .header("content-length", CUSTOM_PET_ZIP.len())
+                .header(
+                    oneclient_common::constants::COSMETICS_PROXY_MARKER,
+                    oneclient_common::constants::COSMETICS_PROXY_MARKER_VALUE,
+                )
+                .body(Full::new(Bytes::from_static(CUSTOM_PET_ZIP)))
+                .unwrap_or_else(|_| error_json(StatusCode::INTERNAL_SERVER_ERROR, "pet asset"))
+        } else if method == Method::GET && path == "/cosmetics" {
+            match catalog().await {
+                Ok(value) => json_response(StatusCode::OK, &value),
+                Err(err) => error_json(StatusCode::BAD_GATEWAY, &err),
+            }
         } else if method == Method::GET && path == "/cosmetics/player" {
             handle_player_get(&request).await
         } else if method == Method::PUT && path == "/cosmetics/player" {
@@ -1045,7 +1121,35 @@ mod tests {
         });
         let (cosmetics, emotes) = split_catalog(&catalog);
         assert_eq!(cosmetics.len(), 1);
-        assert_eq!(emotes, vec![json!({"id": 99, "name": "Wave", "url": "u", "hash": "h2"})]);
+        assert_eq!(
+            emotes,
+            vec![json!({"id": 99, "name": "Wave", "url": "u", "hash": "h2"})]
+        );
+    }
+
+    #[test]
+    fn injects_the_custom_pet_exactly_once() {
+        let catalog = json!({ "cosmetics": [
+            {"id": 1, "type": "cape", "name": "Capes", "variants": []},
+        ]});
+        let injected = with_custom_pets(catalog);
+        let groups = injected["cosmetics"].as_array().unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[1]["id"].as_u64(), Some(CUSTOM_PET_ID));
+        assert_eq!(groups[1]["type"].as_str(), Some("pet"));
+        assert_eq!(groups[1]["variants"][0]["id"].as_u64(), Some(CUSTOM_PET_ID));
+        // idempotent: a second pass must not duplicate the group
+        let twice = with_custom_pets(injected);
+        assert_eq!(twice["cosmetics"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn embedded_pet_asset_is_a_valid_zip() {
+        // PK\x03\x04 local-file-header magic; enough to prove the bundle shipped
+        assert!(CUSTOM_PET_ZIP.len() > 100);
+        assert_eq!(&CUSTOM_PET_ZIP[..2], b"PK");
+        assert!(!CUSTOM_PET_HASH.is_empty());
+        assert_eq!(CUSTOM_PET_HASH.len(), 40);
     }
 
     #[test]
@@ -1282,7 +1386,10 @@ mod tests {
         )
         .await;
         let elapsed = started.elapsed();
-        assert!(result.is_err(), "a stalled upstream must surface as an error");
+        assert!(
+            result.is_err(),
+            "a stalled upstream must surface as an error"
+        );
         assert!(
             elapsed < Duration::from_secs(10),
             "a stalled upstream must not hang: took {elapsed:?}"
@@ -1331,7 +1438,10 @@ mod tests {
         )
         .await;
         let elapsed = started.elapsed();
-        assert!(result.is_err(), "a silent peer must not complete the handshake");
+        assert!(
+            result.is_err(),
+            "a silent peer must not complete the handshake"
+        );
         assert!(
             elapsed < Duration::from_secs(10),
             "the handshake must be bounded: took {elapsed:?}"
