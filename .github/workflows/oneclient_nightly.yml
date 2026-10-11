@@ -316,6 +316,36 @@ jobs:
           fi
           ls -la dist
 
+      # The binary moved /usr/bin/oneclient_app from the old `one-client` package
+      # to `aethel-one`. Without Conflicts/Replaces, dpkg refuses to unpack over
+      # the old package's files and the install dies with "trying to overwrite
+      # '/usr/bin/oneclient_app', which is also in package one-client" (issue #1).
+      # Declaring the transition lets dpkg remove the old package automatically.
+      - name: (Linux) Declare the legacy package transition in the .deb
+        if: matrix.platform == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=(dist/*.deb)
+          if [ ${#debs[@]} -eq 0 ]; then
+            echo "::error::No .deb to patch"
+            exit 1
+          fi
+          for deb in "${debs[@]}"; do
+            work="$(mktemp -d)"
+            dpkg-deb --raw-extract "$deb" "$work/root"
+            control="$work/root/DEBIAN/control"
+            if ! grep -q '^Conflicts:' "$control"; then
+              printf 'Conflicts: one-client\nReplaces: one-client (<< 2.8.0)\n' >> "$control"
+            fi
+            dpkg-deb --root-owner-group --build "$work/root" "$deb.tmp" >/dev/null
+            mv "$deb.tmp" "$deb"
+            rm -rf "$work"
+            echo "patched $deb"
+            dpkg-deb --field "$deb" Conflicts
+          done
+
       - name: Upload unsigned executable
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

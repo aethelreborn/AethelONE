@@ -540,9 +540,14 @@ jobs:
             # file. dpkg/apt then swaps the old package out instead of refusing
             # to overwrite its files. cargo-packager cannot emit these fields, so
             # inject them before the package is signed.
+            # NOTE: this must name the LEGACY package (`one-client`), not this
+            # package's own name — a package that Conflicts with itself can never
+            # be installed or upgraded.
             ctrl="$(mktemp -d)"
             dpkg-deb -R "$OUT_DIR/$deb_unique" "$ctrl"
-            printf 'Conflicts: aethel-one\nReplaces: aethel-one\n' >> "$ctrl/DEBIAN/control"
+            if ! grep -q '^Conflicts:' "$ctrl/DEBIAN/control"; then
+              printf 'Conflicts: one-client\nReplaces: one-client (<< 2.8.0)\n' >> "$ctrl/DEBIAN/control"
+            fi
             dpkg-deb --root-owner-group -b "$ctrl" "$OUT_DIR/$deb_unique"
             rm -rf "$ctrl"
           fi
