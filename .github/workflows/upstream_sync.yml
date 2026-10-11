@@ -82,7 +82,16 @@ jobs:
               echo "Resolve locally with \`git fetch upstream && git merge upstream/main\`, then push."
             } > conflict-issue.md
             git merge --abort || true
-            gh issue create --repo "${GITHUB_REPOSITORY}" --title "Upstream sync conflict" --body-file conflict-issue.md || true
+            existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+              --search 'Upstream sync conflict in:title' --json number \
+              --jq '.[0].number // empty')"
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --repo "${GITHUB_REPOSITORY}" \
+                --body-file conflict-issue.md || true
+            else
+              gh issue create --repo "${GITHUB_REPOSITORY}" --title "Upstream sync conflict" \
+                --body-file conflict-issue.md || true
+            fi
             exit 1
           fi
         env:
