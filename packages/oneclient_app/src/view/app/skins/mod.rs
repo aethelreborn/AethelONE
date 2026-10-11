@@ -2,14 +2,15 @@ use bytes::Bytes;
 use freya::prelude::*;
 
 use crate::components::{
-    Button, ButtonVariant, Icon, IconType, PlayerModel, ScrollArea, TextInput,
+    Button, ButtonVariant, Icon, IconType, PlayerModel, ScrollArea, Segment, SegmentedControl,
+    TextInput,
 };
-use crate::hooks::{try_default_account, use_current_account};
+use crate::hooks::{invalidate_local_skin_queries, try_default_account, use_current_account};
 use crate::theme::colors;
 use crate::ui::border_all_color;
 
-mod library;
 pub mod inject;
+pub mod library;
 
 use library::{
     Library, SkinEntry, SkinKind, fetch_by_name, fetch_url, file_display_name, validate_skin,
@@ -39,6 +40,14 @@ impl Component for AccountSkins {
                 .active_bytes()
                 .map(|(entry, bytes)| (bytes, entry.slim))
         });
+        // Slim/Classic override for the selected skin; synced from the entry
+        // whenever the selection changes
+        let model_slim = use_state(|| {
+            Library::load()
+                .active_bytes()
+                .map(|(entry, _)| entry.slim)
+                .unwrap_or(true)
+        });
 
         let selected_id = selected.read().clone();
         let selected_entry = selected_id
@@ -47,6 +56,29 @@ impl Component for AccountSkins {
         let active_id = library.read().active.clone();
         let busy_now = *busy.peek();
         let already_active = selected_id.is_some() && selected_id == active_id;
+
+        use_side_effect_with_deps(selected_id.clone(), move |id| {
+            let library = library.read();
+            let slim = id
+                .as_deref()
+                .and_then(|id| library.entry(id))
+                .map(|entry| entry.slim);
+            if let Some(slim) = slim {
+                model_slim.set(slim);
+            }
+        });
+
+        let slim_now = *model_slim.read();
+        use_side_effect_with_deps(slim_now, move |slim| {
+            apply_model_slim(
+                library,
+                selected,
+                preview,
+                status,
+                selected.read().clone(),
+                *slim,
+            );
+        });
 
         rect()
             .horizontal()
@@ -60,6 +92,7 @@ impl Component for AccountSkins {
                 account_name,
                 selected_entry.as_ref(),
                 preview.read().clone(),
+                model_slim,
                 library,
                 selected,
                 status,
@@ -87,6 +120,7 @@ fn preview_panel(
     account_name: Option<String>,
     selected: Option<&SkinEntry>,
     preview: Option<(Bytes, bool)>,
+    model_slim: State<bool>,
     library: State<Library>,
     selected_state: State<Option<String>>,
     status: State<Option<(String, bool)>>,
@@ -132,6 +166,20 @@ fn preview_panel(
                 ),
         )
         .child(
+            rect()
+                .horizontal()
+                .main_align(Alignment::Center)
+                .width(Size::fill())
+                .child(
+                    SegmentedControl::new(model_slim)
+                        .height(32.)
+                        .equal_width(72.)
+                        .disabled(selected.is_none())
+                        .segment(Segment::new(true).label("Slim"))
+                        .segment(Segment::new(false).label("Classic")),
+                ),
+        )
+        .child(
             Button::new()
                 .variant(ButtonVariant::Primary)
                 .width(Size::fill())
@@ -156,8 +204,46 @@ fn equip_selected(
         return;
     };
     library.write().set_active(Some(id));
+    invalidate_local_skin();
     status.set(Some((
         "Active — offline accounts will wear it in game".to_string(),
+        false,
+    )));
+}
+
+/// Avatars read the active skin from the library through a query, so they
+/// need a nudge after any change to it
+fn invalidate_local_skin() {
+    spawn(invalidate_local_skin_queries());
+}
+
+/// Persists the Slim/Classic override onto the selected entry and keeps the
+/// preview (and anything else wearing the skin) on the new model
+fn apply_model_slim(
+    mut library: State<Library>,
+    selected: State<Option<String>>,
+    mut preview: State<Option<(Bytes, bool)>>,
+    mut status: State<Option<(String, bool)>>,
+    id: Option<String>,
+    slim: bool,
+) {
+    let Some(id) = id else {
+        return;
+    };
+    if !library.write().set_slim(&id, slim) {
+        return;
+    }
+    let current = preview.read().clone();
+    if let Some((bytes, _)) = current {
+        preview.set(Some((bytes, slim)));
+    }
+    invalidate_local_skin();
+    status.set(Some((
+        if slim {
+            "Model set to Slim".to_string()
+        } else {
+            "Model set to Classic".to_string()
+        },
         false,
     )));
 }
@@ -348,6 +434,7 @@ fn side_panel(
                                     .active_bytes()
                                     .map(|(entry, bytes)| (bytes, entry.slim)),
                             );
+                            invalidate_local_skin();
                             status.set(Some(("Skin removed".to_string(), false)));
                         }),
                 ),
@@ -411,6 +498,7 @@ fn import_button(
                         match added {
                             Ok(id) => {
                                 library.write().set_active(Some(id.clone()));
+                                invalidate_local_skin();
                                 selected.set(Some(id));
                                 preview.set(Some((bytes, slim)));
                                 status.set(Some((
@@ -476,6 +564,7 @@ fn add_from_url(
                 match added {
                     Ok(id) => {
                         library.write().set_active(Some(id.clone()));
+                        invalidate_local_skin();
                         selected.set(Some(id));
                         preview.set(Some((bytes, slim)));
                         status.set(Some((
@@ -522,6 +611,7 @@ fn add_from_name(
                 match added {
                     Ok(id) => {
                         library.write().set_active(Some(id.clone()));
+                        invalidate_local_skin();
                         selected.set(Some(id));
                         preview.set(Some((bytes, slim)));
                         status.set(Some((

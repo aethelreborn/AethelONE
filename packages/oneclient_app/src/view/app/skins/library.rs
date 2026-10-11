@@ -104,6 +104,20 @@ impl Library {
         let _ = self.save();
     }
 
+    /// Overrides the model guessed at import time when detection picked the
+    /// wrong arm width. Returns whether anything changed.
+    pub fn set_slim(&mut self, id: &str, slim: bool) -> bool {
+        let Some(entry) = self.skins.iter_mut().find(|entry| entry.id == id) else {
+            return false;
+        };
+        if entry.slim == slim {
+            return false;
+        }
+        entry.slim = slim;
+        let _ = self.save();
+        true
+    }
+
     pub fn entry(&self, id: &str) -> Option<&SkinEntry> {
         self.skins.iter().find(|entry| entry.id == id)
     }
