@@ -251,14 +251,24 @@ fn error_json(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
 
 // ---------------------------------------------------------------- catalog
 
+/// Empty catalog baked into the binary: a fresh install (or a wiped cache)
+/// with the backend down must still answer `/cosmetics` and keep the locally
+/// stored equipment reachable, instead of failing with `502`.
+static BUNDLED_CATALOG: &[u8] = include_bytes!("../assets/cosmetics_catalog.json");
+
 async fn catalog() -> Result<Value, String> {
-    catalog_from(&CLIENT, UPSTREAM, &catalog_file()).await
+    catalog_from(&CLIENT, UPSTREAM, &catalog_file(), Some(BUNDLED_CATALOG)).await
 }
 
+/// Answers from the first tier that can: the in-memory cache, the on-disk
+/// cache (served instantly while a refresh runs in the background), a blocking
+/// upstream refresh, and finally `fallback` (the bundled catalog), which is
+/// served with a warning so a downed backend never blanks the locker.
 async fn catalog_from(
     client: &reqwest::Client,
     base: &str,
     disk: &Option<PathBuf>,
+    fallback: Option<&[u8]>,
 ) -> Result<Value, String> {
     if let Some((fetched_at, value)) = STATE.catalog.read().unwrap().clone()
         && fetched_at.elapsed() < CATALOG_TTL
@@ -271,7 +281,21 @@ async fn catalog_from(
         spawn_catalog_refresh(client.clone(), base.to_owned(), disk.clone());
         return Ok(value);
     }
-    refresh_catalog(client, base, disk).await
+    match refresh_catalog(client, base, disk).await {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            let Some(bytes) = fallback else {
+                return Err(err);
+            };
+            match serde_json::from_slice::<Value>(bytes) {
+                Ok(value) => {
+                    warn!("cosmetics proxy: {err}; serving the bundled fallback catalog");
+                    Ok(value)
+                }
+                Err(decode) => Err(format!("{err}; bundled fallback decode failed: {decode}")),
+            }
+        }
+    }
 }
 
 fn spawn_catalog_refresh(client: reqwest::Client, base: String, disk: Option<PathBuf>) {
@@ -294,7 +318,7 @@ async fn refresh_catalog(
     base: &str,
     disk: &Option<PathBuf>,
 ) -> Result<Value, String> {
-    match forward_to(
+    let response = forward_to(
         client,
         base,
         &Method::GET,
@@ -303,31 +327,24 @@ async fn refresh_catalog(
         Bytes::new(),
     )
     .await
-    {
-        Ok(response) if response.status() == 200 => match response.bytes().await {
-            Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
-                Ok(value) => {
-                    if let Some(path) = disk {
-                        let _ = std::fs::write(path, &bytes);
-                    }
-                    *STATE.catalog.write().unwrap() = Some((Instant::now(), value.clone()));
-                    Ok(value)
-                }
-                Err(err) => Err(format!("catalog decode failed: {err}")),
-            },
-            Err(err) => Err(format!("catalog read failed: {err}")),
-        },
-        Ok(response) => Err(format!("catalog refresh failed: {}", response.status())),
-        Err(err) => {
-            if let Some(value) = read_json(disk) {
-                debug!("cosmetics proxy: using on-disk catalog cache ({err})");
-                *STATE.catalog.write().unwrap() = Some((Instant::now(), value.clone()));
-                Ok(value)
-            } else {
-                Err(format!("catalog refresh failed: {err}"))
-            }
-        }
+    .map_err(|err| format!("catalog refresh failed: {err}"))?;
+    if response.status() != 200 {
+        return Err(format!("catalog refresh failed: {}", response.status()));
     }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| format!("catalog read failed: {err}"))?;
+    let value = serde_json::from_slice::<Value>(&bytes)
+        .map_err(|err| format!("catalog decode failed: {err}"))?;
+    if let Some(path) = disk {
+        let _ = std::fs::write(path, &bytes);
+    }
+    // Only a successful refresh restarts the TTL clock: a failed one must
+    // leave the stale entry (or no entry) untouched, so the next request
+    // retries instead of waiting out another full TTL on a broken cache.
+    *STATE.catalog.write().unwrap() = Some((Instant::now(), value.clone()));
+    Ok(value)
 }
 
 fn split_catalog(catalog: &Value) -> (Vec<Value>, Vec<Value>) {
@@ -408,7 +425,13 @@ async fn handle_player_get(request: &Request<Incoming>) -> Response<Full<Bytes>>
     }
     let catalog = match catalog().await {
         Ok(catalog) => catalog,
-        Err(err) => return error_json(StatusCode::BAD_GATEWAY, &err),
+        Err(err) => {
+            // Offline with no usable cache at all: the locally stored
+            // equipment must still reach the game (with an empty item list)
+            // instead of the whole locker coming up blank behind a 502.
+            warn!("cosmetics proxy: catalog unavailable ({err}); serving the local equipment only");
+            json!({ "cosmetics": [] })
+        }
     };
     let (cosmetics, emotes) = split_catalog(&catalog);
     let equipped = STATE.equipped.read().unwrap().clone();
@@ -1328,9 +1351,14 @@ mod tests {
         CATALOG_REFRESHING.store(false, Ordering::Relaxed);
 
         let started = Instant::now();
-        let value = catalog_from(&client, &format!("http://{addr}"), &disk)
-            .await
-            .unwrap();
+        let value = catalog_from(
+            &client,
+            &format!("http://{addr}"),
+            &disk,
+            Some(BUNDLED_CATALOG),
+        )
+        .await
+        .unwrap();
         let elapsed = started.elapsed();
         assert_eq!(value, expected, "must serve the on-disk cache");
         assert!(
@@ -1338,6 +1366,43 @@ mod tests {
             "disk cache must be served instantly: took {elapsed:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn catalog_falls_back_to_the_bundled_catalog_when_nothing_is_cached() {
+        let addr = stall_upstream().await;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(300))
+            .build()
+            .unwrap();
+        let disk: Option<PathBuf> = None;
+        *STATE.catalog.write().unwrap() = None;
+        let base = format!("http://{addr}");
+
+        // Without a fallback tier the failure still surfaces as an error…
+        let err = catalog_from(&client, &base, &disk, None)
+            .await
+            .expect_err("a stalled upstream with no cache must fail");
+        assert!(
+            err.contains("catalog refresh failed"),
+            "unexpected error: {err}"
+        );
+
+        // …and with the bundled tier the caller always gets a usable catalog.
+        let started = Instant::now();
+        let value = catalog_from(&client, &base, &disk, Some(BUNDLED_CATALOG))
+            .await
+            .expect("the bundled catalog must answer when nothing else can");
+        let elapsed = started.elapsed();
+        let cosmetics = value
+            .get("cosmetics")
+            .and_then(Value::as_array)
+            .expect("the bundled catalog must keep the cosmetics shape");
+        assert!(cosmetics.is_empty(), "expected an empty catalog: {value}");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "the bundled fallback must not wait on the upstream: took {elapsed:?}"
+        );
     }
 
     #[tokio::test]
