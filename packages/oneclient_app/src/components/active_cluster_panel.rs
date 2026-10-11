@@ -8,7 +8,7 @@ use oneclient_core::clusters::ClusterKind;
 
 use crate::hooks::{
     settled_or_loading, use_active_cluster_id, use_clusters, use_dispatch, use_game_snapshot,
-    use_launcher, use_version_metadata,
+    use_launcher, use_overlay_claims, use_version_metadata,
 };
 use crate::routes::Route;
 use crate::theme::colors;
@@ -18,6 +18,26 @@ use crate::view::app::{launch_button_state, launch_syncing};
 #[derive(PartialEq)]
 pub struct ActiveClusterPanel;
 
+/// A text field owns the keyboard before this page does, the same rule Escape
+/// follows in the app outlet.
+fn is_text_entry(role: AccessibilityRole) -> bool {
+    matches!(
+        role,
+        AccessibilityRole::TextInput
+            | AccessibilityRole::MultilineTextInput
+            | AccessibilityRole::SearchInput
+            | AccessibilityRole::PasswordInput
+    )
+}
+
+/// The one launch trigger: the primary button's `on_press` and the Enter
+/// shortcut both land here so the enabled gate is never forked.
+fn press_launch(dispatch: &crate::Actions, cluster_id: i64, enabled: bool) {
+    if enabled {
+        dispatch.launch_cluster(cluster_id);
+    }
+}
+
 impl Component for ActiveClusterPanel {
     fn render(&self) -> impl IntoElement {
         let clusters_query = use_clusters();
@@ -25,6 +45,9 @@ impl Component for ActiveClusterPanel {
         let dispatch = use_dispatch();
         let game = use_game_snapshot();
         let launcher = use_launcher();
+        // A modal claims Enter before this panel does
+        let key_claims = use_overlay_claims();
+        let focused_node = Platform::get().focused_accessibility_node;
 
         let clusters = settled_or_loading(&clusters_query).unwrap_or_default();
 
@@ -92,6 +115,19 @@ impl Component for ActiveClusterPanel {
         };
         let cluster_id = cluster.id;
         let syncing = launch_syncing(&launcher, cluster.uses_bundles());
+        let (launch_label, enabled) = launch_button_state(&game, cluster_id, syncing);
+
+        // The panel only exists on the home route, so Enter dies with the page
+        let enter_dispatch = dispatch.clone();
+        let on_enter = move |e: Event<KeyboardEventData>| match &e.key {
+            Key::Named(NamedKey::Enter) => {
+                if key_claims.any() || is_text_entry(focused_node.peek().role()) {
+                    return;
+                }
+                press_launch(&enter_dispatch, cluster_id, enabled);
+            }
+            _ => {}
+        };
 
         rect()
             .vertical()
@@ -100,6 +136,7 @@ impl Component for ActiveClusterPanel {
             .cross_align(Alignment::Start)
             .offset_x(slide_x)
             .opacity(p)
+            .on_global_key_down(on_enter)
             .child(
                 label()
                     .text(title)
@@ -127,7 +164,7 @@ impl Component for ActiveClusterPanel {
                     .child(launch_button(
                         cluster_id,
                         dispatch.clone(),
-                        launch_button_state(&game, cluster_id, syncing),
+                        (launch_label, enabled),
                     ))
                     .maybe_child(
                         game.is_running(cluster_id)
@@ -151,11 +188,8 @@ fn launch_button(
         .font_weight(FontWeight::from(450))
         .enabled(enabled)
         .padding(Gaps::new_symmetric(8., 24.))
-        .on_press(move |_| {
-            if enabled {
-                dispatch.launch_cluster(cluster_id);
-            }
-        })
+        .tooltip("Launch (Enter)")
+        .on_press(move |_| press_launch(&dispatch, cluster_id, enabled))
         .text(label)
 }
 
