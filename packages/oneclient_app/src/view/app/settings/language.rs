@@ -2,7 +2,9 @@ use freya::prelude::*;
 
 use super::settings_page;
 use crate::components::{Icon, IconType};
+use crate::layout::pending_setting_focus;
 use crate::theme::colors;
+use crate::ui::border_all_color;
 use crate::view::app::settings::section_header;
 
 const LANGUAGES: &[(&str, &str)] = &[("English", "English (US)")];
@@ -30,6 +32,7 @@ fn language_row(
     mut selected: State<usize>,
 ) -> impl IntoElement {
     let is_selected = *selected.read() == index;
+    let focused = pending_setting_focus() == Some("language.select");
 
     rect()
         .horizontal()
@@ -39,6 +42,9 @@ fn language_row(
         .padding(Gaps::new_symmetric(12., 16.))
         .corner_radius(CornerRadius::new_all(12.))
         .background(colors::page_elevated())
+        .maybe(focused, |el| {
+            el.border(border_all_color(2., colors::brand()))
+        })
         .cursor(CursorIcon::Pointer)
         .on_press(move |_| *selected.write() = index)
         .child(

@@ -3,7 +3,7 @@ use freya::prelude::*;
 use super::settings_page;
 use crate::components::{IconType, TextInput};
 use crate::hooks::{use_dispatch, use_settings_snapshot};
-use crate::view::app::settings::{resettable, section_header, settings_row};
+use crate::view::app::settings::{resettable, section_header, settings_row, settings_row_focus};
 
 fn normalize(value: &str) -> Option<String> {
     let trimmed = value.trim();
@@ -59,7 +59,8 @@ impl Component for SettingsApis {
 
         settings_page()
             .child(section_header("PROVIDERS"))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "apis.modrinth_key",
                 IconType::Key01,
                 "Modrinth",
                 "Personal access token used for Modrinth requests.",
@@ -71,7 +72,8 @@ impl Component for SettingsApis {
                     String::new(),
                 ),
             ))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "apis.curseforge_key",
                 IconType::Key01,
                 "CurseForge",
                 "API key used for CurseForge requests.",
@@ -84,7 +86,8 @@ impl Component for SettingsApis {
                 ),
             ))
             .child(section_header("ADVANCED"))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "apis.custom_endpoint",
                 IconType::Globe01,
                 "Custom API Endpoint",
                 "Override the default AethelONE backend endpoint.",

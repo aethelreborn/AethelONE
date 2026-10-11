@@ -44,6 +44,18 @@ pub(crate) fn set_pending_setting_focus(id: &'static str) {
     });
 }
 
+/// The setting the search bar asked the open page to highlight, if any.
+pub(crate) fn pending_setting_focus() -> Option<&'static str> {
+    PENDING_SETTING_FOCUS.with(|cell| *cell.borrow())
+}
+
+/// Scroll context and controller of the settings scroll area, for search jumps.
+pub(crate) fn settings_scroll() -> Option<(ScrollAreaCtx, ScrollController)> {
+    let ctx = SETTINGS_SCROLL_CTX.with(|cell| *cell.borrow());
+    let controller = SETTINGS_SCROLL_CONTROLLER.with(|cell| *cell.borrow());
+    ctx.zip(controller)
+}
+
 #[derive(Clone)]
 struct SearchItem {
     id: &'static str,
