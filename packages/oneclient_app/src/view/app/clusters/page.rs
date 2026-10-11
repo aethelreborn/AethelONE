@@ -435,11 +435,35 @@ impl Component for Clusters {
                                             },
                                         ),
                                     )
-                                    .append_children(nothing_shown.then(|| {
-                                        label()
-                                            .text("No instances match your search or filters.")
-                                            .font_size(13.)
-                                            .color(colors::fg_secondary())
+                                    .append_children(nothing_shown.then(move || {
+                                        let mut query = query;
+                                        let mut loaders = loaders;
+                                        let mut sort = sort;
+                                        rect()
+                                            .vertical()
+                                            .width(Size::fill())
+                                            .main_align(Alignment::Center)
+                                            .cross_align(Alignment::Center)
+                                            .spacing(12.)
+                                            .child(
+                                                label()
+                                                    .text(
+                                                        "No instances match your search or filters.",
+                                                    )
+                                                    .font_size(13.)
+                                                    .color(colors::fg_secondary()),
+                                            )
+                                            .child(
+                                                Button::new()
+                                                    .secondary()
+                                                    .small()
+                                                    .text("Clear search and filters")
+                                                    .on_press(move |_| {
+                                                        query.set(String::new());
+                                                        loaders.set(Vec::new());
+                                                        sort.set(Sort::RecentFirst);
+                                                    }),
+                                            )
                                             .into_element()
                                     })),
                             ),

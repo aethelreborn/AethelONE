@@ -524,15 +524,39 @@ fn downloads_row(downloads: u64) -> impl IntoElement {
         )
 }
 
-pub(super) fn empty_state() -> impl IntoElement {
+pub(super) fn empty_state(
+    query: State<String>,
+    selected_categories: State<Vec<String>>,
+    sort: State<SearchSort>,
+) -> impl IntoElement {
     rect()
         .width(Size::fill())
         .height(Size::fill())
         .center()
         .child(
-            label()
-                .text("No results. Try a different search, category or provider.")
-                .font_size(14.)
-                .color(colors::fg_secondary()),
+            rect()
+                .vertical()
+                .spacing(12.)
+                .cross_align(Alignment::Center)
+                .child(
+                    label()
+                        .text("No results. Try a different search, category or provider.")
+                        .font_size(14.)
+                        .color(colors::fg_secondary()),
+                )
+                .child({
+                    let mut query = query;
+                    let mut selected_categories = selected_categories;
+                    let mut sort = sort;
+                    Button::new()
+                        .secondary()
+                        .small()
+                        .text("Clear search and filters")
+                        .on_press(move |_| {
+                            query.set(String::new());
+                            selected_categories.set(Vec::new());
+                            sort.set(SearchSort::Relevance);
+                        })
+                }),
         )
 }
