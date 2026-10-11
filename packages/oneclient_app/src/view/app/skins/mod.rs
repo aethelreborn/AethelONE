@@ -57,7 +57,7 @@ impl Component for AccountSkins {
         let busy_now = *busy.peek();
         let already_active = selected_id.is_some() && selected_id == active_id;
 
-        use_side_effect_with_deps(selected_id.clone(), move |id| {
+        use_side_effect_with_deps(&selected_id, move |id| {
             let library = library.read();
             let slim = id
                 .as_deref()
@@ -69,7 +69,7 @@ impl Component for AccountSkins {
         });
 
         let slim_now = *model_slim.read();
-        use_side_effect_with_deps(slim_now, move |slim| {
+        use_side_effect_with_deps(&slim_now, move |slim| {
             apply_model_slim(
                 library,
                 selected,
@@ -154,16 +154,13 @@ fn preview_panel(
                 .child(model.into_element()),
         )
         .child(
-            rect()
-                .center()
-                .width(Size::fill())
-                .child(
-                    label()
-                        .text(caption)
-                        .font_size(14.)
-                        .font_weight(FontWeight::SEMI_BOLD)
-                        .color(colors::fg_primary()),
-                ),
+            rect().center().width(Size::fill()).child(
+                label()
+                    .text(caption)
+                    .font_size(14.)
+                    .font_weight(FontWeight::SEMI_BOLD)
+                    .color(colors::fg_primary()),
+            ),
         )
         .child(
             rect()
@@ -184,7 +181,11 @@ fn preview_panel(
                 .variant(ButtonVariant::Primary)
                 .width(Size::fill())
                 .disabled(!equip_enabled || already_active)
-                .text(if already_active { "Equipped" } else { "Equip skin" })
+                .text(if already_active {
+                    "Equipped"
+                } else {
+                    "Equip skin"
+                })
                 .on_press(move |_| {
                     equip_selected(library, selected_state, status);
                 }),
@@ -558,9 +559,13 @@ fn add_from_url(
                     .filter(|name| !name.is_empty())
                     .unwrap_or_else(|| "URL skin".to_string());
 
-                let added = library
-                    .write()
-                    .add(display, url.trim().to_string(), SkinKind::Url, slim, &bytes);
+                let added = library.write().add(
+                    display,
+                    url.trim().to_string(),
+                    SkinKind::Url,
+                    slim,
+                    &bytes,
+                );
                 match added {
                     Ok(id) => {
                         library.write().set_active(Some(id.clone()));
