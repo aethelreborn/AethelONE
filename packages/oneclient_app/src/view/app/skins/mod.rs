@@ -42,7 +42,7 @@ impl Component for AccountSkins {
         });
         // Slim/Classic override for the selected skin; synced from the entry
         // whenever the selection changes
-        let model_slim = use_state(|| {
+        let mut model_slim = use_state(|| {
             Library::load()
                 .active_bytes()
                 .map(|(entry, _)| entry.slim)
