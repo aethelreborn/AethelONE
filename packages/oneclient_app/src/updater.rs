@@ -616,7 +616,7 @@ fn run_package_manager(path: &std::path::Path, ext: &str) -> anyhow::Result<()> 
         let (program, rest) = args
             .split_first()
             .expect("candidate command always has a program");
-        match pkexec(program, rest) {
+        match elevate(program, rest) {
             Ok(()) => return Ok(()),
             Err(err) if err.downcast_ref::<UpdateCancelled>().is_some() => return Err(err),
             Err(err) => failures.push(format!("{program}: {err:#}")),
@@ -626,30 +626,87 @@ fn run_package_manager(path: &std::path::Path, ext: &str) -> anyhow::Result<()> 
     anyhow::bail!(failures.join("; "))
 }
 
+/// Runs a command as root, trying each available elevation method in turn.
+///
+/// polkit's `pkexec` gives a clean GUI prompt on desktop systems but is often
+/// absent on minimal installs (e.g. antiX). There we fall back to `sudo`, first
+/// in askpass mode (`-A`, which can still pop a GUI password dialog via an
+/// askpass helper) and then plain. The first method that is present on the
+/// system is tried to completion; a method that is merely *missing* is skipped
+/// so the next one gets a chance.
 #[cfg(target_os = "linux")]
-fn pkexec(program: &str, args: &[&str]) -> anyhow::Result<()> {
+fn elevate(program: &str, args: &[&str]) -> anyhow::Result<()> {
     use std::process::{Command, Stdio};
 
-    let output = Command::new("pkexec")
-        .arg(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| format!("could not start pkexec {program} - is polkit installed?"))?;
-
-    if output.status.success() {
-        return Ok(());
+    // (program, extra flags) candidates, in priority order.
+    let mut candidates: Vec<(&str, &[&str])> = Vec::new();
+    if command_exists("pkexec") {
+        candidates.push(("pkexec", &[]));
+    }
+    if command_exists("sudo") {
+        candidates.push(("sudo", &["-A"]));
+        candidates.push(("sudo", &[]));
     }
 
-    match output.status.code() {
-        // polkit: 126 = dismissed by the user, 127 = not authorized / no auth agent
-        Some(126) | Some(127) => Err(UpdateCancelled.into()),
-        _ => anyhow::bail!(
-            "exited with {}{}",
-            output.status,
-            stderr_suffix(&output.stderr)
-        ),
+    if candidates.is_empty() {
+        anyhow::bail!("no elevation tool found (need pkexec or sudo)");
     }
+
+    let mut last_err: Option<anyhow::Error> = None;
+    for (tool, flags) in candidates {
+        let mut cmd = Command::new(tool);
+        cmd.args(flags).arg(program).args(args).stdin(Stdio::null());
+
+        let output = match cmd.output() {
+            Ok(output) => output,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // tool vanished between the exists-check and spawn; try next.
+                continue;
+            }
+            Err(err) => {
+                last_err = Some(
+                    anyhow::Error::new(err).context(format!("could not start {tool} {program}")),
+                );
+                continue;
+            }
+        };
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        match output.status.code() {
+            // polkit: 126 = dismissed by the user, 127 = not authorized / no agent
+            Some(126) | Some(127) if tool == "pkexec" => {
+                return Err(UpdateCancelled.into());
+            }
+            // sudo: 1 = error (incl. askpass unavailable) or not authorized.
+            _ => {
+                last_err = Some(anyhow::anyhow!(
+                    "{tool}: exited with {}{}",
+                    output.status,
+                    stderr_suffix(&output.stderr)
+                ));
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no elevation tool could run {program}")))
+}
+
+/// True if `name` is present on `$PATH` and is executable.
+#[cfg(target_os = "linux")]
+fn command_exists(name: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| {
+        let candidate = dir.join(name);
+        std::fs::metadata(&candidate)
+            .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -672,5 +729,19 @@ mod tests {
         let err = verify_release_signature(b"payload", "definitely not base64!")
             .expect_err("a malformed signature must fail verification");
         assert!(err.to_string().contains("base64"), "got: {err:#}");
+    }
+
+    // command_exists is Linux-only, as is the whole elevation path.
+    #[cfg(all(test, target_os = "linux"))]
+    #[test]
+    fn command_exists_finds_coreutils_and_rejects_missing_programs() {
+        use super::command_exists;
+        // `sh` is essentially always on PATH on a Unix system.
+        assert!(command_exists("sh"), "expected sh to be found on PATH");
+        // A program that will never exist.
+        assert!(
+            !command_exists("definitely-not-a-real-program-xyz"),
+            "expected a nonexistent program to be reported missing"
+        );
     }
 }
