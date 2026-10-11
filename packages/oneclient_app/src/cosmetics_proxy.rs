@@ -6,8 +6,9 @@
 //!
 //! * `GET  /cosmetics/player` — every catalog item reads as owned; equipment
 //!   choices are persisted under `~/.aethelone/` (seeded once from the
-//!   account's official locker when one exists).
-//! * `PUT  /cosmetics/player` — writes that local equipment state.
+//!   account's official locker when one exists), keyed per account.
+//! * `PUT  /cosmetics/player` — writes that local equipment state for the
+//!   account behind the request's session token.
 //! * `POST /account/login` — tried against the real backend first; when the
 //!   backend rejects the session (offline accounts have no Mojang session),
 //!   a local bearer token is minted so Poly+ proceeds and the locker below
@@ -23,10 +24,17 @@
 //!   (pings/pongs) so the mod's equipment sync stays healthy. Textures are
 //!   never proxied: they come straight from the public CDN.
 //!
+//! The launcher launches every account through this one proxy, so the
+//! equipment above is stored per account: the mod only attaches a bearer
+//! token to the locker routes, and the account behind a request is resolved
+//! through the `/account/login` exchange that minted that token (the
+//! `player`/`username` query parameters the mod sends there). Requests whose
+//! token is unknown share a `__default__` bucket.
+//!
 //! Nothing is uploaded, mirrored or shared; other players always see their
 //! official ownership. The whole feature is local-only by design.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -79,42 +87,185 @@ static CATALOG_REFRESHING: AtomicBool = AtomicBool::new(false);
 
 // ---------------------------------------------------------------- state
 
+/// Identifies the local player a cosmetics request belongs to: the profile id
+/// or player name the mod sends with `/account/login` for the account whose
+/// bearer token the request carries. Falls back to [`DEFAULT_ACCOUNT`] when
+/// no account can be recognised.
+type AccountId = String;
+
+/// Bucket for requests with no recognisable account, and the parking spot for
+/// state written before equipment was tracked per account (which the first
+/// identified account claims, see [`loadout_mut`]). Chosen so it cannot
+/// collide with a real account id (profile ids are UUIDs, player names are
+/// Minecraft names).
+const DEFAULT_ACCOUNT: &str = "__default__";
+
+/// One account's cosmetics loadout: what it has equipped, its particle
+/// colour, and whether its official locker has been seeded already.
+#[derive(Clone, Default)]
+struct Loadout {
+    equipped: BTreeMap<String, Value>,
+    particle_color: Option<Value>,
+    seeded: bool,
+}
+
+impl Loadout {
+    fn from_json(value: &Value) -> Self {
+        Self {
+            equipped: value
+                .get("equipped")
+                .and_then(Value::as_object)
+                .map(|object| {
+                    object
+                        .iter()
+                        .map(|(slot, id)| (slot.clone(), id.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            particle_color: value.get("particle_color").cloned(),
+            seeded: value
+                .get("seeded")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "equipped": Value::Object(self.equipped.clone().into_iter().collect()),
+            "particle_color": self.particle_color.clone(),
+            "seeded": self.seeded,
+        })
+    }
+}
+
+/// Bearer tokens issued by `/account/login`, oldest first. The mod attaches
+/// its current token to every locker request, so this is the only link from
+/// such a request to the account behind it. Bounded because a launcher run
+/// only ever mints a handful of tokens (one per game session, plus refreshes).
+#[derive(Default)]
+struct Sessions {
+    entries: Vec<(String, AccountId)>,
+}
+
+const SESSION_LIMIT: usize = 32;
+
+impl Sessions {
+    fn register(&mut self, token: &str, account: &AccountId) {
+        if token.is_empty() {
+            return;
+        }
+        self.entries.retain(|(known, _)| known != token);
+        self.entries.push((token.to_owned(), account.clone()));
+        if self.entries.len() > SESSION_LIMIT {
+            self.entries.remove(0);
+        }
+    }
+
+    fn resolve(&self, token: &str) -> Option<AccountId> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|(known, _)| known == token)
+            .map(|(_, account)| account.clone())
+    }
+}
+
 #[derive(Default)]
 struct ProxyState {
     catalog: RwLock<Option<(Instant, Value)>>,
-    equipped: RwLock<BTreeMap<String, Value>>,
-    particle_color: RwLock<Option<Value>>,
-    seeded: AtomicBool,
+    accounts: RwLock<HashMap<AccountId, Loadout>>,
+    sessions: RwLock<Sessions>,
 }
 
 impl ProxyState {
     fn load() -> Self {
+        Self::from_json(read_json(&state_file()))
+    }
+
+    fn from_json(value: Option<Value>) -> Self {
         let state = Self::default();
-        if let Some(value) = read_json(&state_file()) {
-            if let Some(object) = value.get("equipped").and_then(Value::as_object) {
-                *state.equipped.write().unwrap() =
-                    object.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let Some(value) = value else { return state };
+        let mut accounts = state.accounts.write().unwrap();
+        if let Some(object) = value.get("accounts").and_then(Value::as_object) {
+            for (account, entry) in object {
+                accounts.insert(account.clone(), Loadout::from_json(entry));
             }
-            *state.particle_color.write().unwrap() = value.get("particle_color").cloned();
-            state.seeded.store(
-                value
-                    .get("seeded")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                Ordering::Relaxed,
-            );
+        } else if value.get("equipped").is_some()
+            || value.get("particle_color").is_some()
+            || value.get("seeded").is_some()
+        {
+            // State written before equipment was tracked per account: park it
+            // in the account-less bucket until a real account claims it.
+            accounts.insert(DEFAULT_ACCOUNT.to_owned(), Loadout::from_json(&value));
         }
+        drop(accounts);
         state
     }
 
-    fn persist(&self) {
-        let value = json!({
-            "equipped": Value::Object(self.equipped.read().unwrap().clone().into_iter().collect()),
-            "particle_color": self.particle_color.read().unwrap().clone(),
-            "seeded": self.seeded.load(Ordering::Relaxed),
-        });
-        write_json_atomic(&state_file(), &value);
+    fn to_json(&self) -> Value {
+        let accounts: serde_json::Map<String, Value> = self
+            .accounts
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(account, loadout)| (account.clone(), loadout.to_json()))
+            .collect();
+        json!({ "accounts": Value::Object(accounts) })
     }
+
+    fn persist(&self) {
+        write_json_atomic(&state_file(), &self.to_json());
+    }
+
+    /// Snapshot of `account`'s loadout, claiming any account-less state parked
+    /// in [`DEFAULT_ACCOUNT`] on the way (see [`loadout_mut`]).
+    fn loadout(&self, account: &AccountId) -> Loadout {
+        let mut accounts = self.accounts.write().unwrap();
+        loadout_mut(&mut accounts, account).clone()
+    }
+
+    fn with_loadout<R>(&self, account: &AccountId, update: impl FnOnce(&mut Loadout) -> R) -> R {
+        let mut accounts = self.accounts.write().unwrap();
+        update(loadout_mut(&mut accounts, account))
+    }
+
+    fn seeded(&self, account: &AccountId) -> bool {
+        self.loadout(account).seeded
+    }
+
+    fn register_session(&self, token: &str, account: &AccountId) {
+        self.sessions.write().unwrap().register(token, account);
+    }
+
+    fn session_account(&self, token: &str) -> Option<AccountId> {
+        self.sessions.read().unwrap().resolve(token)
+    }
+}
+
+/// Returns `account`'s loadout, storing an empty one when the account is new
+/// to this proxy.
+///
+/// State written before equipment was tracked per account lives under
+/// [`DEFAULT_ACCOUNT`]: the first identified account to show up is the one
+/// that owned it, so it claims the whole bucket (equipment, particle colour
+/// and the "already seeded" flag travel with it), leaving later accounts to
+/// start empty and seed their own official locker.
+fn loadout_mut<'a>(
+    accounts: &'a mut HashMap<AccountId, Loadout>,
+    account: &str,
+) -> &'a mut Loadout {
+    if !accounts.contains_key(account) {
+        let inherited = if account == DEFAULT_ACCOUNT {
+            Loadout::default()
+        } else {
+            accounts.remove(DEFAULT_ACCOUNT).unwrap_or_default()
+        };
+        accounts.insert(account.to_owned(), inherited);
+    }
+    accounts
+        .get_mut(account)
+        .expect("a loadout was just stored for the account")
 }
 
 fn state_dir() -> Option<PathBuf> {
@@ -385,7 +536,51 @@ fn split_catalog(catalog: &Value) -> (Vec<Value>, Vec<Value>) {
 
 // ------------------------------------------------------------ player state
 
-async fn seed_from_upstream(headers: &HeaderMap) {
+/// The account behind a locker request. The mod attaches the bearer token
+/// `/account/login` issued to every `/cosmetics/player` call, so a token this
+/// proxy has seen resolves to the account behind its login; requests with no
+/// token (or a token from before a restart) share [`DEFAULT_ACCOUNT`].
+fn request_account(headers: &HeaderMap) -> AccountId {
+    bearer_token(headers)
+        .and_then(|token| STATE.session_account(token))
+        .unwrap_or_else(|| DEFAULT_ACCOUNT.to_owned())
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(hyper::header::AUTHORIZATION)?.to_str().ok()?;
+    let token = match value.get(..7) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("bearer ") => value.get(7..)?,
+        _ => value,
+    };
+    let token = token.trim();
+    (!token.is_empty()).then_some(token)
+}
+
+/// The account behind a `/account/login` call: the mod names the player's
+/// profile id (`player`) towards a local backend, and the player name
+/// (`username`) towards every backend, as query parameters.
+fn account_from_login(path_and_query: &str, body: &[u8]) -> Option<AccountId> {
+    query_param(path_and_query, "player")
+        .or_else(|| query_param(path_and_query, "username"))
+        .or_else(|| {
+            let value = serde_json::from_slice::<Value>(body).ok()?;
+            ["player", "username", "selectedProfile", "playerId"]
+                .iter()
+                .find_map(|key| value.get(*key).and_then(Value::as_str).map(str::to_owned))
+        })
+        .filter(|account| !account.is_empty())
+}
+
+/// Percent-decoding query lookup, for the parameters the mod URL-encodes into
+/// the login call.
+fn query_param(path_and_query: &str, name: &str) -> Option<String> {
+    let url = reqwest::Url::parse(&format!("http://localhost{path_and_query}")).ok()?;
+    url.query_pairs()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.into_owned())
+}
+
+async fn seed_from_upstream(account: &AccountId, headers: &HeaderMap) {
     let result = async {
         let response =
             forward_request(&Method::GET, "/cosmetics/player", headers, Bytes::new()).await?;
@@ -400,31 +595,33 @@ async fn seed_from_upstream(headers: &HeaderMap) {
     .await;
     match result {
         Ok(official) => {
-            if let Some(object) = official.get("equipped").and_then(Value::as_object) {
-                let mut equipped = STATE.equipped.write().unwrap();
-                equipped.clear();
-                for (slot, id) in object {
-                    if !id.is_null() {
-                        equipped.insert(slot.clone(), id.clone());
+            STATE.with_loadout(account, |loadout| {
+                if let Some(object) = official.get("equipped").and_then(Value::as_object) {
+                    loadout.equipped.clear();
+                    for (slot, id) in object {
+                        if !id.is_null() {
+                            loadout.equipped.insert(slot.clone(), id.clone());
+                        }
                     }
                 }
-            }
-            let color = official.get("particle_color").cloned();
-            if color.as_ref().is_some_and(|value| !value.is_null()) {
-                *STATE.particle_color.write().unwrap() = color;
-            }
-            info!("cosmetics proxy: seeded from the official locker");
+                let color = official.get("particle_color").cloned();
+                if color.as_ref().is_some_and(|value| !value.is_null()) {
+                    loadout.particle_color = color;
+                }
+            });
+            info!(account = %account, "cosmetics proxy: seeded from the official locker");
         }
         Err(err) => debug!("cosmetics proxy: official seed skipped ({err}); starting empty"),
     }
 }
 
 async fn handle_player_get(request: &Request<Incoming>) -> Response<Full<Bytes>> {
-    if !STATE.seeded.load(Ordering::Relaxed) {
+    let account = request_account(request.headers());
+    if !STATE.seeded(&account) {
         let _guard = SEED_LOCK.lock().await;
-        if !STATE.seeded.load(Ordering::Relaxed) {
-            seed_from_upstream(request.headers()).await;
-            STATE.seeded.store(true, Ordering::Relaxed);
+        if !STATE.seeded(&account) {
+            seed_from_upstream(&account, request.headers()).await;
+            STATE.with_loadout(&account, |loadout| loadout.seeded = true);
             STATE.persist();
         }
     }
@@ -439,8 +636,9 @@ async fn handle_player_get(request: &Request<Incoming>) -> Response<Full<Bytes>>
         }
     };
     let (cosmetics, emotes) = split_catalog(&catalog);
-    let equipped = STATE.equipped.read().unwrap().clone();
+    let loadout = STATE.loadout(&account);
     info!(
+        account = %account,
         groups = cosmetics.len(),
         emotes = emotes.len(),
         "cosmetics proxy: served the local player locker (every item owned)"
@@ -450,13 +648,14 @@ async fn handle_player_get(request: &Request<Incoming>) -> Response<Full<Bytes>>
         &json!({
             "cosmetics": cosmetics,
             "emotes": emotes,
-            "equipped": Value::Object(equipped.into_iter().collect()),
-            "particle_color": STATE.particle_color.read().unwrap().clone(),
+            "equipped": Value::Object(loadout.equipped.into_iter().collect()),
+            "particle_color": loadout.particle_color,
         }),
     )
 }
 
 async fn handle_player_put(request: Request<Incoming>) -> Response<Full<Bytes>> {
+    let account = request_account(request.headers());
     let body = match request.into_body().collect().await {
         Ok(collected) => collected.to_bytes(),
         Err(_) => return error_json(StatusCode::BAD_REQUEST, "bad body"),
@@ -465,24 +664,26 @@ async fn handle_player_put(request: Request<Incoming>) -> Response<Full<Bytes>> 
         Ok(patch) => patch,
         Err(_) => return error_json(StatusCode::BAD_REQUEST, "bad json"),
     };
-    if let Some(object) = patch.get("equipped").and_then(Value::as_object) {
-        let mut equipped = STATE.equipped.write().unwrap();
-        for (slot, id) in object {
-            if id.is_null() {
-                equipped.remove(slot);
-            } else {
-                equipped.insert(slot.clone(), id.clone());
+    STATE.with_loadout(&account, |loadout| {
+        if let Some(object) = patch.get("equipped").and_then(Value::as_object) {
+            for (slot, id) in object {
+                if id.is_null() {
+                    loadout.equipped.remove(slot);
+                } else {
+                    loadout.equipped.insert(slot.clone(), id.clone());
+                }
             }
         }
-    }
-    if let Some(color) = patch.get("particle_color")
-        && !color.is_null()
-    {
-        *STATE.particle_color.write().unwrap() = Some(color.clone());
-    }
+        if let Some(color) = patch.get("particle_color")
+            && !color.is_null()
+        {
+            loadout.particle_color = Some(color.clone());
+        }
+    });
     STATE.persist();
-    let equipped = STATE.equipped.read().unwrap().clone();
+    let equipped = STATE.loadout(&account).equipped;
     info!(
+        account = %account,
         slots = equipped.len(),
         "cosmetics proxy: equipment change stored locally"
     );
@@ -560,10 +761,11 @@ async fn handle_account_login(request: Request<Incoming>) -> Response<Full<Bytes
         Ok(collected) => collected.to_bytes(),
         Err(err) => return error_json(StatusCode::BAD_REQUEST, &format!("body: {err}")),
     };
+    let account = account_from_login(&path_and_query, &body);
     let response = build_forward_response(&Method::POST, &path_and_query, &headers, body).await;
     let status = response.status();
     if status.is_success() {
-        return response;
+        return remember_session(response, account).await;
     }
     if status != StatusCode::UNAUTHORIZED
         && status != StatusCode::FORBIDDEN
@@ -573,11 +775,38 @@ async fn handle_account_login(request: Request<Incoming>) -> Response<Full<Bytes
         return response;
     }
     let token = format!("{LOCAL_TOKEN_PREFIX}{}", uuid::Uuid::new_v4());
+    if let Some(account) = account.as_ref() {
+        STATE.register_session(&token, account);
+    }
     info!(
         status = %status,
         "cosmetics proxy: real backend rejected the session; issuing a local token instead"
     );
     json_response(StatusCode::OK, &json!({ "token": token }))
+}
+
+/// Binds a freshly issued session token to the account that logged in, so the
+/// locker requests that follow (the mod only sends the token) can be keyed to
+/// that account. The response itself is handed back untouched.
+async fn remember_session(
+    response: Response<Full<Bytes>>,
+    account: Option<AccountId>,
+) -> Response<Full<Bytes>> {
+    let Some(account) = account else {
+        return response;
+    };
+    let (parts, body) = response.into_parts();
+    let bytes = match body.collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(err) => return error_json(StatusCode::BAD_GATEWAY, &format!("login body: {err}")),
+    };
+    if let Ok(value) = serde_json::from_slice::<Value>(&bytes)
+        && let Some(token) = value.get("token").and_then(Value::as_str)
+    {
+        STATE.register_session(token, &account);
+        debug!(account = %account, "cosmetics proxy: session token bound to its account");
+    }
+    Response::from_parts(parts, Full::new(bytes))
 }
 
 // -------------------------------------------------------- response cache
@@ -1336,6 +1565,147 @@ mod tests {
             emotes,
             vec![json!({"id": 99, "name": "Wave", "url": "u", "hash": "h2"})]
         );
+    }
+
+    #[test]
+    fn equipment_is_held_per_account() {
+        let state = ProxyState::default();
+        let alice = "alice".to_owned();
+        let bob = "bob".to_owned();
+        state.with_loadout(&alice, |loadout| {
+            loadout.equipped.insert("cape".to_owned(), json!(11));
+        });
+        state.with_loadout(&bob, |loadout| {
+            loadout.equipped.insert("cape".to_owned(), json!(22));
+        });
+        assert_eq!(state.loadout(&alice).equipped["cape"], json!(11));
+        assert_eq!(state.loadout(&bob).equipped["cape"], json!(22));
+
+        // Unequipping for one account leaves the other loadout alone.
+        state.with_loadout(&bob, |loadout| {
+            assert!(loadout.equipped.remove("cape").is_some());
+        });
+        assert!(state.loadout(&bob).equipped.is_empty());
+        assert_eq!(state.loadout(&alice).equipped["cape"], json!(11));
+    }
+
+    #[test]
+    fn seeding_is_tracked_per_account() {
+        let state = ProxyState::default();
+        let alice = "alice".to_owned();
+        let bob = "bob".to_owned();
+        state.with_loadout(&alice, |loadout| loadout.seeded = true);
+        assert!(state.seeded(&alice));
+        assert!(!state.seeded(&bob), "each account seeds its own locker");
+    }
+
+    #[test]
+    fn state_written_before_accounts_is_claimed_by_the_first_account() {
+        let state = ProxyState::from_json(Some(json!({
+            "equipped": {"cape": 7},
+            "particle_color": "red",
+            "seeded": true,
+        })));
+        let alice = "alice".to_owned();
+        let bob = "bob".to_owned();
+        let claimed = state.loadout(&alice);
+        assert_eq!(claimed.equipped["cape"], json!(7));
+        assert_eq!(claimed.particle_color, Some(json!("red")));
+        assert!(claimed.seeded, "the owner keeps the already-seeded flag");
+        let fresh = state.loadout(&bob);
+        assert!(fresh.equipped.is_empty());
+        assert!(!fresh.seeded, "a later account seeds its own locker");
+    }
+
+    #[test]
+    fn per_account_state_survives_a_disk_round_trip() {
+        let state = ProxyState::default();
+        let alice = "alice".to_owned();
+        let bob = "bob".to_owned();
+        state.with_loadout(&alice, |loadout| {
+            loadout.equipped.insert("cape".to_owned(), json!(11));
+            loadout.particle_color = Some(json!("#fff"));
+            loadout.seeded = true;
+        });
+        state.with_loadout(&bob, |loadout| {
+            loadout.equipped.insert("hat".to_owned(), json!(22));
+        });
+
+        let restored = ProxyState::from_json(Some(state.to_json()));
+        let alice = restored.loadout(&alice);
+        assert_eq!(alice.equipped["cape"], json!(11));
+        assert_eq!(alice.particle_color, Some(json!("#fff")));
+        assert!(alice.seeded);
+        let bob = restored.loadout(&bob);
+        assert_eq!(bob.equipped["hat"], json!(22));
+        assert!(!bob.seeded);
+    }
+
+    #[test]
+    fn sessions_bind_login_tokens_to_their_account() {
+        let mut sessions = Sessions::default();
+        let alice = "alice".to_owned();
+        sessions.register("token-a", &alice);
+        sessions.register("token-b", &"bob".to_owned());
+        assert_eq!(sessions.resolve("token-a"), Some(alice));
+        assert_eq!(sessions.resolve("token-b"), Some("bob".to_owned()));
+        assert_eq!(sessions.resolve("token-c"), None);
+    }
+
+    #[test]
+    fn login_calls_name_the_account_they_belong_to() {
+        assert_eq!(
+            account_from_login("/account/login?server_id=probe&username=Alice", b""),
+            Some("Alice".to_owned())
+        );
+        assert_eq!(
+            account_from_login(
+                "/account/login?player=069a79f4-44e9-4726-a5be-fca90e38aaf5",
+                b""
+            ),
+            Some("069a79f4-44e9-4726-a5be-fca90e38aaf5".to_owned())
+        );
+        assert_eq!(
+            account_from_login("/account/login", br#"{"username":"Bob"}"#),
+            Some("Bob".to_owned())
+        );
+        assert_eq!(account_from_login("/account/login?username=", b""), None);
+        assert_eq!(account_from_login("/account/login", b"{}"), None);
+    }
+
+    #[test]
+    fn locker_requests_read_the_bearer_token() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(bearer_token(&headers), None);
+        headers.insert(
+            hyper::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer token-a"),
+        );
+        assert_eq!(bearer_token(&headers), Some("token-a"));
+        headers.insert(
+            hyper::header::AUTHORIZATION,
+            HeaderValue::from_static("bearer token-b"),
+        );
+        assert_eq!(bearer_token(&headers), Some("token-b"));
+        headers.insert(
+            hyper::header::AUTHORIZATION,
+            HeaderValue::from_static("   "),
+        );
+        assert_eq!(bearer_token(&headers), None);
+
+        // The token is what names the account: an unrecognised one shares the
+        // account-less bucket instead of inventing an identity.
+        STATE.register_session("token-a", &"alice".to_owned());
+        headers.insert(
+            hyper::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer token-a"),
+        );
+        assert_eq!(request_account(&headers), "alice");
+        headers.insert(
+            hyper::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer token-unknown"),
+        );
+        assert_eq!(request_account(&headers), DEFAULT_ACCOUNT);
     }
 
     #[test]
