@@ -39,17 +39,25 @@ pub enum ModpackOrigin {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LoaderChoice {
     Fabric,
+    Quilt,
     Forge,
     NeoForge,
     Vanilla,
 }
 
 impl LoaderChoice {
-    pub const ALL: [Self; 4] = [Self::Fabric, Self::Forge, Self::NeoForge, Self::Vanilla];
+    pub const ALL: [Self; 5] = [
+        Self::Fabric,
+        Self::Quilt,
+        Self::Forge,
+        Self::NeoForge,
+        Self::Vanilla,
+    ];
 
     pub fn primary(self) -> GameLoader {
         match self {
             Self::Fabric => GameLoader::Fabric,
+            Self::Quilt => GameLoader::Quilt,
             Self::Forge => GameLoader::Forge,
             Self::NeoForge => GameLoader::NeoForge,
             Self::Vanilla => GameLoader::Vanilla,
@@ -63,6 +71,7 @@ impl LoaderChoice {
     pub fn mark(self) -> &'static str {
         match self {
             Self::Fabric => "icons/fabric.png",
+            Self::Quilt => "icons/quilt.png",
             Self::Forge => "icons/forge.png",
             Self::NeoForge => "icons/neo-forge.png",
             Self::Vanilla => "icons/vanilla.png",
@@ -72,6 +81,7 @@ impl LoaderChoice {
     pub fn short(self) -> &'static str {
         match self {
             Self::Fabric => "FA",
+            Self::Quilt => "QU",
             Self::Forge => "FO",
             Self::NeoForge => "NF",
             Self::Vanilla => "MC",
@@ -81,7 +91,10 @@ impl LoaderChoice {
     pub fn blurb(self) -> &'static str {
         match self {
             Self::Fabric => {
-                "Light and quick to start. The widest package selection on modern versions, and the legacy build covers 1.8.9 and older."
+                "Light and quick to start. The widest package selection on modern versions, and the legacy build (including Ornithe) covers 1.8.9 and older."
+            }
+            Self::Quilt => {
+                "A Fabric fork with its own package index. Quilt-only packages need it; most Fabric packages still work."
             }
             Self::Forge => "The oldest loader. Most 1.12.2 and 1.8.9 packages need it.",
             Self::NeoForge => "Forge's successor, for 1.20.2 and newer.",

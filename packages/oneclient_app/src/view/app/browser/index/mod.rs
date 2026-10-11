@@ -334,7 +334,7 @@ impl Component for BrowserBody {
                 }),
             }
         } else {
-            sa.children([empty_state().into_element()])
+            sa.children([empty_state(query, selected_categories, sort).into_element()])
         }
         .into_element();
 
