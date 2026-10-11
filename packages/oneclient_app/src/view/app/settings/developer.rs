@@ -8,7 +8,7 @@ use crate::components::{IconType, link_button, toggle};
 use crate::hooks::{
     BROWSER_COMPAT_DEFAULT, use_browser_compat, use_dispatch, use_settings_snapshot,
 };
-use crate::view::app::settings::{resettable, section_header, settings_row};
+use crate::view::app::settings::{resettable, section_header, settings_row, settings_row_focus};
 use crate::view::console::open_log_console;
 
 #[derive(PartialEq)]
@@ -39,7 +39,8 @@ impl Component for SettingsDeveloper {
 
         settings_page()
             .child(section_header("BROWSER"))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "developer.compat_only",
                 IconType::SearchMd,
                 "Compatible content only",
                 "Filter the content browser to the active cluster's version and loader.",
@@ -50,7 +51,8 @@ impl Component for SettingsDeveloper {
                 ),
             ))
             .child(section_header("DEV TOOLS"))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "developer.log_debug",
                 IconType::Sliders04,
                 "Log Debug Info",
                 "WARNING! This requires a restart to apply. Logs out debug info.",
@@ -62,7 +64,8 @@ impl Component for SettingsDeveloper {
                 "Stream the launcher's logs in a separate window. Nothing is captured while it is closed.",
                 link_button().on_press(move |_| open_log_console()),
             ))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "developer.debug_page",
                 IconType::CodeSnippet02,
                 "Debug Page",
                 "View the debug page.",

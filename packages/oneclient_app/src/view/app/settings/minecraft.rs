@@ -10,7 +10,9 @@ use crate::components::{
 };
 use crate::hooks::{use_dispatch, use_settings_snapshot};
 use crate::theme::colors;
-use crate::view::app::settings::{resettable, resettable_all, section_header, settings_row};
+use crate::view::app::settings::{
+    resettable, resettable_all, section_header, settings_row, settings_row_focus,
+};
 
 #[derive(PartialEq)]
 pub struct SettingsMinecraft;
@@ -102,7 +104,8 @@ impl Component for SettingsMinecraft {
 
         let page = settings_page()
             .child(section_header("GAME"))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "minecraft.force_fullscreen",
                 IconType::Maximize01,
                 "Force Fullscreen",
                 "Force Minecraft to start in fullscreen mode.",
@@ -112,7 +115,8 @@ impl Component for SettingsMinecraft {
                     defaults.force_fullscreen.unwrap_or(false),
                 ),
             ))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "minecraft.resolution",
                 IconType::LayoutTop,
                 "Resolution",
                 "The game window resolution in pixels.",
@@ -136,7 +140,8 @@ impl Component for SettingsMinecraft {
                     ],
                 ),
             ))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "minecraft.memory",
                 IconType::Database01,
                 "Memory",
                 "The amount of memory in megabytes allocated for the game. Presets leave 2 GB for the system.",
@@ -191,7 +196,8 @@ impl Component for SettingsMinecraft {
                 ),
             ))
             .child(section_header("PROCESS"))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "minecraft.pre_launch",
                 IconType::FilePlus02,
                 "Pre-Launch Command",
                 "Command to run before launching the game.",
@@ -204,7 +210,8 @@ impl Component for SettingsMinecraft {
                     defaults.hook_pre.clone().unwrap_or_default(),
                 ),
             ))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "minecraft.wrapper",
                 IconType::ParagraphWrap,
                 "Wrapper Command",
                 "Command to run when launching the game.",
@@ -217,7 +224,8 @@ impl Component for SettingsMinecraft {
                     defaults.hook_wrapper.clone().unwrap_or_default(),
                 ),
             ))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "minecraft.post_exit",
                 IconType::FileX02,
                 "Post-Exit Command",
                 "Command to run after exiting the game.",

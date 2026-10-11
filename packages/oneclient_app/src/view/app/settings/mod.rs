@@ -10,6 +10,8 @@ mod launcher;
 mod minecraft;
 mod storage;
 
+use std::cell::RefCell;
+
 use freya::prelude::*;
 
 pub use accounts::SettingsAccounts;
@@ -25,10 +27,77 @@ pub use storage::SettingsStorage;
 
 use crate::{
     components::{Button, Icon, IconType},
+    layout::{pending_setting_focus, settings_scroll},
     theme::colors,
+    ui::border_all_color,
 };
 
+/// The last search jump that already scrolled, so re-measuring the row mid-highlight
+/// does not yank the scroll position again.
+thread_local! {
+    static FOCUS_SCROLLED: RefCell<Option<&'static str>> = const { RefCell::new(None) };
+}
+
+/// Distance the search-jump target lands below the top of the settings scroll area
+const FOCUS_SCROLL_MARGIN_PX: f32 = 24.;
+
+/// The search bar publishes its jump target through the settings shell. A jump always
+/// remounts the page through the search overlay, so this re-reads the target on mount,
+/// re-arms the scroll claim, and re-renders once the highlight window expires.
+pub fn use_setting_focus() {
+    let pending = pending_setting_focus();
+    let armed = use_state(|| pending);
+    let current = *armed.read();
+
+    let mut first = use_state(|| true);
+    if *first.peek() {
+        first.set(false);
+        FOCUS_SCROLLED.with(|cell| *cell.borrow_mut() = None);
+    }
+
+    use_side_effect_with_deps(&current, move |pending| {
+        if pending.is_none() {
+            return;
+        }
+        let mut armed = armed;
+        spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            // The page may already be gone because the user started searching again
+            if let Some(mut value) = armed.try_write() {
+                *value = None;
+            }
+        });
+    });
+}
+
+/// Scrolls the search-jump target near the top of the settings scroll area, once per jump
+fn scroll_setting_into_view(id: &'static str, row_top: f32) {
+    if pending_setting_focus() != Some(id) {
+        return;
+    }
+
+    let claimed = FOCUS_SCROLLED.with(|cell| {
+        let already = *cell.borrow();
+        if already == Some(id) {
+            false
+        } else {
+            *cell.borrow_mut() = Some(id);
+            true
+        }
+    });
+    if !claimed {
+        return;
+    }
+
+    let Some((ctx, mut controller)) = settings_scroll() else {
+        return;
+    };
+    let row_in_content = row_top - ctx.viewport_top - ctx.corrected_y;
+    controller.scroll_to_y((FOCUS_SCROLL_MARGIN_PX - row_in_content) as i32);
+}
+
 pub fn settings_page() -> Rect {
+    use_setting_focus();
     rect().vertical().width(Size::fill()).spacing(4.)
 }
 
@@ -51,7 +120,7 @@ pub fn settings_row(
     description: impl Into<String>,
     trailing: impl IntoElement,
 ) -> impl IntoElement {
-    settings_row_inner(icon, title, description, trailing, false)
+    settings_row_inner(icon, title, description, trailing, false, None)
 }
 
 pub fn settings_row_disabled(
@@ -60,7 +129,30 @@ pub fn settings_row_disabled(
     description: impl Into<String>,
     trailing: impl IntoElement,
 ) -> impl IntoElement {
-    settings_row_inner(icon, title, description, trailing, true)
+    settings_row_inner(icon, title, description, trailing, true, None)
+}
+
+/// Same as [`settings_row`] but carries the settings-search id so a search jump can
+/// highlight the row and scroll it into view
+pub fn settings_row_focus(
+    id: &'static str,
+    icon: IconType,
+    title: &'static str,
+    description: impl Into<String>,
+    trailing: impl IntoElement,
+) -> impl IntoElement {
+    settings_row_inner(icon, title, description, trailing, false, Some(id))
+}
+
+/// Disabled twin of [`settings_row_focus`]
+pub fn settings_row_disabled_focus(
+    id: &'static str,
+    icon: IconType,
+    title: &'static str,
+    description: impl Into<String>,
+    trailing: impl IntoElement,
+) -> impl IntoElement {
+    settings_row_inner(icon, title, description, trailing, true, Some(id))
 }
 
 fn settings_row_inner(
@@ -69,9 +161,12 @@ fn settings_row_inner(
     description: impl Into<String>,
     trailing: impl IntoElement,
     disabled: bool,
+    focus: Option<&'static str>,
 ) -> impl IntoElement {
     let description = description.into();
-    rect()
+    let focused = focus.is_some_and(|id| pending_setting_focus() == Some(id));
+
+    let mut row = rect()
         .maybe(disabled, |el| el.opacity(0.4))
         .horizontal()
         .width(Size::fill())
@@ -101,8 +196,18 @@ fn settings_row_inner(
                         .color(colors::fg_secondary()),
                 ),
         )
-        .child(trailing)
-        .into_element()
+        .child(trailing);
+
+    if let Some(id) = focus {
+        row = row
+            .on_sized(move |e: Event<SizedEventData>| scroll_setting_into_view(id, e.area.min_y()));
+    }
+
+    if focused {
+        row = row.border(border_all_color(2., colors::brand()));
+    }
+
+    row.into_element()
 }
 
 #[derive(PartialEq)]

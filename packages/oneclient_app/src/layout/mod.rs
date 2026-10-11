@@ -15,3 +15,4 @@ pub use onboarding_shell::OnboardingShell;
 pub use pending_launch::PendingLaunchDriver;
 pub use root_layout::RootLayout;
 pub use settings_shell::SettingsShell;
+pub(crate) use settings_shell::{pending_setting_focus, settings_scroll};

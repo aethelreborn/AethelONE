@@ -6,7 +6,7 @@ use crate::components::{Icon, IconType, toggle};
 use crate::hooks::{use_dispatch, use_settings_snapshot};
 use crate::theme::colors;
 use crate::ui::border_all_color;
-use crate::view::app::settings::{resettable, settings_row, settings_row_disabled};
+use crate::view::app::settings::{resettable, settings_row_disabled_focus, settings_row_focus};
 
 #[derive(Clone, Copy)]
 struct ThemePreview {
@@ -219,7 +219,8 @@ fn line_tint(theme: ThemePreview) -> Color {
 }
 
 fn accent_color_row() -> impl IntoElement {
-    settings_row_disabled(
+    settings_row_disabled_focus(
+        "appearance.accent_color",
         IconType::PaintPour,
         "Accent color",
         "The main color used across the launcher. This doesn't edit your theme.",
@@ -242,7 +243,8 @@ fn accent_color_row() -> impl IntoElement {
 }
 
 fn custom_theme_row() -> impl IntoElement {
-    settings_row_disabled(
+    settings_row_disabled_focus(
+        "appearance.custom_theme",
         IconType::Colors,
         "Custom theme",
         "Create, edit, and import launcher themes",
@@ -251,7 +253,8 @@ fn custom_theme_row() -> impl IntoElement {
 }
 
 fn dynamic_background_row(enabled: State<bool>, default: bool) -> impl IntoElement {
-    settings_row(
+    settings_row_focus(
+        "appearance.parallax_background",
         IconType::Eye,
         "Parallax background",
         "Make the home screen background drift with your cursor. Turning it off keeps the background but disables the motion.",
@@ -260,7 +263,8 @@ fn dynamic_background_row(enabled: State<bool>, default: bool) -> impl IntoEleme
 }
 
 fn animations_row(animations_on: State<bool>, default: bool) -> impl IntoElement {
-    settings_row(
+    settings_row_focus(
+        "appearance.animations",
         IconType::Play,
         "Animations",
         "Whether all launcher animations and transitions should be enabled.",

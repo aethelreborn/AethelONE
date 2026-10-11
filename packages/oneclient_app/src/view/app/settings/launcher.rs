@@ -6,7 +6,7 @@ use oneclient_core::relocate::RelocationPlan;
 use oneclient_core::settings::{LaunchBehaviour, LauncherSettings, data_dir};
 use oneclient_core::storage::format_bytes;
 
-use super::{resettable, section_header, settings_page, settings_row};
+use super::{resettable, section_header, settings_page, settings_row, settings_row_focus};
 use crate::Route;
 use crate::components::{
     Button, Dropdown, Icon, IconType, OverlayPopup, open_folder_button, toggle,
@@ -132,7 +132,8 @@ impl Component for SettingsLauncher {
 
         settings_page()
             .child(section_header("GENERAL"))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "launcher.discord_rpc",
                 IconType::Link03,
                 "Discord RPC",
                 "Enable Discord Rich Presence.",
@@ -168,7 +169,8 @@ impl Component for SettingsLauncher {
                     defaults.cosmetics_unlock,
                 ),
             ))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "launcher.bundled_mod_removal",
                 IconType::Trash01,
                 "Allow Removing Bundled Mods",
                 "Offer Delete for mods installed by instance bundles (e.g. OneConfig). They can always be disabled without this.",
@@ -216,13 +218,15 @@ impl Component for SettingsLauncher {
                 ),
             ))
             .child(section_header("UPDATES"))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "launcher.auto_update",
                 IconType::RefreshCw01,
                 "Auto Update",
                 "Download and install new releases as soon as the launcher starts, without asking.",
                 resettable(toggle(auto_update), auto_update, defaults.auto_update),
             ))
-            .child(settings_row(
+            .child(settings_row_focus(
+                "launcher.check_for_updates",
                 IconType::DownloadCloud02,
                 "Check for Updates",
                 update_status_text(*update_status.read()),
@@ -325,16 +329,18 @@ impl Component for DataFolder {
 
         buttons.push(change);
 
-        let mut section = rect()
-            .vertical()
-            .width(Size::fill())
-            .spacing(4.)
-            .child(settings_row(
-                IconType::Folder,
-                "Launcher Folder",
-                data_dir.clone(),
-                row_actions(PathBuf::from(data_dir), buttons),
-            ));
+        let mut section =
+            rect()
+                .vertical()
+                .width(Size::fill())
+                .spacing(4.)
+                .child(settings_row_focus(
+                    "launcher.folder",
+                    IconType::Folder,
+                    "Launcher Folder",
+                    data_dir.clone(),
+                    row_actions(PathBuf::from(data_dir), buttons),
+                ));
 
         if let Some(message) = error.read().clone() {
             section = section.child(note(message, colors::danger()));
