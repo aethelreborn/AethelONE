@@ -17,7 +17,8 @@ pub const UPDATE_CHOICE_INSTALL: &str = "update.install";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateCheck {
     UpToDate,
-    /// An update exists but the prompt was dismissed before installing.
+    /// An update exists but the prompt was dismissed before installing, or the
+    /// elevation dialog was cancelled halfway through.
     Declined,
     /// The update downloaded and installed; restarting applies it.
     Installed,
@@ -60,6 +61,18 @@ impl std::fmt::Display for UpdateCancelled {
 
 #[cfg(target_os = "linux")]
 impl std::error::Error for UpdateCancelled {}
+
+/// A dismissed elevation (pkexec 126/127) is the user saying no, not a broken
+/// update, so every reporting path skips it.
+#[cfg(target_os = "linux")]
+fn is_cancellation(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<UpdateCancelled>().is_some()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_cancellation(_err: &anyhow::Error) -> bool {
+    false
+}
 
 fn update_prompt(version: &str) -> Prompt<UpdateAnswer> {
     Prompt::new(
@@ -292,19 +305,27 @@ async fn run_check(auto_install: bool, events: EventBus) -> anyhow::Result<Updat
     {
         match kind {
             InstallKind::Deb => {
-                download_and_install_package(update, "deb", events).await?;
-                return Ok(UpdateCheck::Installed);
+                return install_outcome(download_and_install_package(update, "deb", events).await);
             }
             InstallKind::Rpm => {
-                download_and_install_package(update, "rpm", events).await?;
-                return Ok(UpdateCheck::Installed);
+                return install_outcome(download_and_install_package(update, "rpm", events).await);
             }
             _ => {}
         }
     }
 
-    download_and_install(update, events).await?;
-    Ok(UpdateCheck::Installed)
+    install_outcome(download_and_install(update, events).await)
+}
+
+/// Maps an install attempt onto the check's outcome. A dismissed elevation is
+/// a declined update rather than a failure, so neither the manual row nor the
+/// auto path reports an error for it.
+fn install_outcome(result: anyhow::Result<()>) -> anyhow::Result<UpdateCheck> {
+    match result {
+        Ok(()) => Ok(UpdateCheck::Installed),
+        Err(err) if is_cancellation(&err) => Ok(UpdateCheck::Declined),
+        Err(err) => Err(err),
+    }
 }
 
 fn can_self_update(kind: InstallKind) -> bool {
@@ -388,7 +409,9 @@ async fn download_and_install(update: Update, events: EventBus) -> anyhow::Resul
 
     events.progress(progress_id, &label, 0, 0);
 
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+    let task_events = events.clone();
+    let task_version = version.clone();
+    let installed = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         let bytes = retry("update download", || -> anyhow::Result<Vec<u8>> {
             let downloaded = Cell::new(0u64);
             let last_sent = Cell::new(0u64);
@@ -403,26 +426,36 @@ async fn download_and_install(update: Update, events: EventBus) -> anyhow::Resul
                     || now - last_sent.get() >= PROGRESS_STEP
                 {
                     last_sent.set(now);
-                    events.progress(progress_id, &label, now, total);
+                    task_events.progress(progress_id, &label, now, total);
                 }
             })?;
 
             let total = downloaded.get().max(1);
-            events.progress(progress_id, &label, total, total);
+            task_events.progress(progress_id, &label, total, total);
             Ok(bytes)
         })?;
 
         update.install(bytes)?;
 
         // Converts the same download card into its finished state rather than adding a second
-        events.finish_progress(
+        task_events.finish_progress(
             progress_id,
             "Finished Downloading",
-            format!("AethelONE {version} is ready. Restart to apply."),
+            format!("AethelONE {task_version} is ready. Restart to apply."),
         );
         Ok(())
     })
-    .await??;
+    .await
+    .unwrap_or_else(|join_err| {
+        Err(anyhow::Error::new(join_err).context("the update task stopped unexpectedly"))
+    });
+
+    // A download, signature or install failure used to vanish into the log with the
+    // progress card left spinning; finish the card and tell the user instead.
+    if let Err(err) = installed {
+        report_install_failure(&events, progress_id, &version, &err);
+        return Err(err);
+    }
 
     tracing::info!("update installed; restart to apply");
     Ok(())
@@ -463,33 +496,30 @@ async fn download_and_install_package(
             &label_for_download,
         )
     })
-    .await?;
+    .await
+    .unwrap_or_else(|join_err| {
+        Err(anyhow::Error::new(join_err).context("the download task stopped unexpectedly"))
+    });
 
     let bytes = match downloaded {
         Ok(bytes) => bytes,
         Err(err) => {
-            notify_package_failure(&events, progress_id, &version, &err);
+            report_install_failure(&events, progress_id, &version, &err);
             return Err(err);
         }
     };
 
-    let installed = tokio::task::spawn_blocking(move || install_package_file(&bytes, ext)).await?;
+    let installed = tokio::task::spawn_blocking(move || install_package_file(&bytes, ext))
+        .await
+        .unwrap_or_else(|join_err| {
+            Err(anyhow::Error::new(join_err).context("the install task stopped unexpectedly"))
+        });
 
-    match installed {
-        Ok(()) => {}
-        Err(err) if err.downcast_ref::<UpdateCancelled>().is_some() => {
-            events.finish_progress(
-                progress_id,
-                "Update cancelled",
-                format!("AethelONE {version} was not installed."),
-            );
-            tracing::info!("user cancelled the package update");
-            return Ok(());
-        }
-        Err(err) => {
-            notify_package_failure(&events, progress_id, &version, &err);
-            return Err(err);
-        }
+    if let Err(err) = installed {
+        // A cancelled elevation is reported by `report_install_failure` and then
+        // carried up so `install_outcome` can record a decline instead of a failure.
+        report_install_failure(&events, progress_id, &version, &err);
+        return Err(err);
     }
 
     events.finish_progress(
@@ -501,14 +531,27 @@ async fn download_and_install_package(
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-fn notify_package_failure(
+/// Finishes the update's progress card and, unless the user dismissed the
+/// elevation dialog, raises an error notification naming what went wrong and
+/// where to get the release by hand. Returns `true` for that cancellation so
+/// callers never mistake it for a failed install.
+fn report_install_failure(
     events: &EventBus,
     progress_id: Uuid,
     version: &str,
     err: &anyhow::Error,
-) {
-    tracing::warn!("package update failed: {err:#}");
+) -> bool {
+    if is_cancellation(err) {
+        events.finish_progress(
+            progress_id,
+            "Update cancelled",
+            format!("AethelONE {version} was not installed."),
+        );
+        tracing::info!("user cancelled the update: {err}");
+        return true;
+    }
+
+    tracing::warn!("update failed: {err:#}");
     events.finish_progress(progress_id, "Update failed", format!("{err:#}"));
     events
         .notify("Update failed")
@@ -517,6 +560,7 @@ fn notify_package_failure(
         ))
         .error()
         .send();
+    false
 }
 
 /// Fetches the minisign `.sig` release asset that accompanies the package.
@@ -722,13 +766,101 @@ fn stderr_suffix(stderr: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::verify_release_signature;
+    use oneclient_events::{Event, EventBus, Level, Message, Notification, ProgressEvent};
+    use uuid::Uuid;
+
+    use super::{UpdateCheck, install_outcome, report_install_failure, verify_release_signature};
+
+    /// Drains everything the status channel has been told, split into the titles
+    /// of finished progress cards and the notifications raised alongside them.
+    fn drain(rx: &mut oneclient_events::EventReceiver) -> (Vec<String>, Vec<Message>) {
+        let mut finished = Vec::new();
+        let mut messages = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                Event::Progress(ProgressEvent::Complete { title, .. }) => finished.push(title),
+                Event::Notification(Notification::Message(message)) => messages.push(message),
+                _ => {}
+            }
+        }
+        (finished, messages)
+    }
 
     #[test]
     fn release_signature_verification_rejects_garbage_without_panicking() {
         let err = verify_release_signature(b"payload", "definitely not base64!")
             .expect_err("a malformed signature must fail verification");
         assert!(err.to_string().contains("base64"), "got: {err:#}");
+    }
+
+    #[test]
+    fn install_failures_surface_a_failed_card_and_an_error_notification() {
+        let (events, mut rx) = EventBus::channel();
+        let id = Uuid::new_v4();
+        let err = anyhow::anyhow!("release signature verification failed");
+
+        assert!(
+            !report_install_failure(&events, id, "1.2.3", &err),
+            "a real failure is not a cancellation"
+        );
+
+        let (finished, messages) = drain(&mut rx);
+        assert_eq!(finished, ["Update failed"], "the progress card must finish");
+        assert_eq!(messages.len(), 1, "one notification per failure");
+        assert_eq!(messages[0].level, Level::Error);
+        assert_eq!(messages[0].title, "Update failed");
+        assert!(
+            messages[0]
+                .body
+                .contains("release signature verification failed"),
+            "body names the cause: {}",
+            messages[0].body
+        );
+        assert!(
+            messages[0].body.contains("1.2.3"),
+            "body names the version: {}",
+            messages[0].body
+        );
+    }
+
+    #[test]
+    fn install_outcome_reports_installed_and_passes_failures_through() {
+        assert_eq!(install_outcome(Ok(())).unwrap(), UpdateCheck::Installed);
+
+        let err = install_outcome(Err(anyhow::anyhow!("apt-get: exited with status 1")))
+            .expect_err("a failed install is a failed check");
+        assert!(
+            err.to_string().contains("apt-get"),
+            "the cause survives to the caller: {err:#}"
+        );
+    }
+
+    // The cancellation path only exists where elevation does.
+    #[cfg(all(test, target_os = "linux"))]
+    #[test]
+    fn cancelled_installs_finish_neutrally_and_count_as_declined() {
+        use super::UpdateCancelled;
+
+        let (events, mut rx) = EventBus::channel();
+        let id = Uuid::new_v4();
+        let err = anyhow::Error::new(UpdateCancelled);
+
+        assert!(
+            report_install_failure(&events, id, "1.2.3", &err),
+            "pkexec 126/127 is a cancellation"
+        );
+        assert_eq!(
+            install_outcome(Err(err)).expect("a cancelled install is not a failed check"),
+            UpdateCheck::Declined,
+            "the manual row must not claim the update is installed"
+        );
+
+        let (finished, messages) = drain(&mut rx);
+        assert_eq!(finished, ["Update cancelled"]);
+        assert!(
+            messages.is_empty(),
+            "cancelling must not raise an error toast: {messages:?}"
+        );
     }
 
     // command_exists is Linux-only, as is the whole elevation path.
