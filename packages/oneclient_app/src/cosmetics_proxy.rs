@@ -14,6 +14,9 @@
 //!   can load. Real Microsoft sessions pass through untouched.
 //! * everything else — forwarded to the real backend unchanged, including the
 //!   caller's Authorization header, so logins, store and socials keep working.
+//!   Forwarded `GET`s are also held in a short-lived memory cache and
+//!   revalidated with `ETag`/`If-None-Match` (`304`), so a backend hiccup
+//!   replays the last copy instead of failing the request.
 //! * `GET  /websocket` — relays to the real backend when the client presents a
 //!   working upstream token (so other players still see your official
 //!   unlocks); local-session and tokenless clients are answered locally
@@ -36,7 +39,9 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::{CONNECTION, HeaderMap, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, UPGRADE};
+use hyper::header::{
+    CONNECTION, HeaderMap, HeaderValue, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, UPGRADE,
+};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
@@ -508,25 +513,36 @@ async fn build_forward_response(
     headers: &HeaderMap,
     body: Bytes,
 ) -> Response<Full<Bytes>> {
+    if method == Method::GET {
+        // `GET`s ride the response cache: replayed while fresh, revalidated
+        // with `If-None-Match` once stale (see `forward_get_from`).
+        return forward_get_from(&CLIENT, UPSTREAM, path_and_query, headers, body).await;
+    }
     match forward_request(method, path_and_query, headers, body).await {
         Ok(response) => {
             let status =
                 StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let headers = response.headers().clone();
             let body = response.bytes().await.unwrap_or_default();
-            let mut builder = Response::builder().status(status);
-            for (name, value) in headers.iter() {
-                if is_hop_by_hop(name.as_str()) {
-                    continue;
-                }
-                builder = builder.header(name.as_str(), value.as_bytes());
-            }
-            builder
-                .body(Full::new(body))
-                .unwrap_or_else(|_| error_json(StatusCode::BAD_GATEWAY, "response build"))
+            pass_through(status, &headers, body)
         }
         Err(err) => error_json(StatusCode::BAD_GATEWAY, &err),
     }
+}
+
+/// Hands an upstream response back to the game: hop-by-hop headers stay
+/// behind, everything else (and the body) is passed on untouched.
+fn pass_through(status: StatusCode, headers: &HeaderMap, body: Bytes) -> Response<Full<Bytes>> {
+    let mut builder = Response::builder().status(status);
+    for (name, value) in headers.iter() {
+        if is_hop_by_hop(name.as_str()) {
+            continue;
+        }
+        builder = builder.header(name.as_str(), value.as_bytes());
+    }
+    builder
+        .body(Full::new(body))
+        .unwrap_or_else(|_| error_json(StatusCode::BAD_GATEWAY, "response build"))
 }
 
 /// Logins go to the real backend first; only a rejected session (offline
@@ -562,6 +578,237 @@ async fn handle_account_login(request: Request<Incoming>) -> Response<Full<Bytes
         "cosmetics proxy: real backend rejected the session; issuing a local token instead"
     );
     json_response(StatusCode::OK, &json!({ "token": token }))
+}
+
+// -------------------------------------------------------- response cache
+
+/// How long a forwarded `GET` may be replayed without consulting the upstream.
+/// A refresh that fails never re-stamps this: the stale copy keeps answering
+/// (the catalog tiers work the same way) while the next request retries, so a
+/// backend hiccup degrades to last-known data instead of a `502`.
+const FORWARD_CACHE_TTL: Duration = Duration::from_secs(300);
+/// Bound on cached `GET`s; the entry closest to expiring is dropped first.
+const FORWARD_CACHE_MAX_ENTRIES: usize = 64;
+
+/// One forwarded `200 GET`, kept past its deadline so a dead backend can still
+/// be answered from memory.
+#[derive(Clone)]
+struct CachedGet {
+    /// Deadline after which the entry is revalidated instead of replayed.
+    fresh_until: Instant,
+    /// Validator handed to the caller: the upstream's `ETag` when it sent one,
+    /// otherwise a quoted `sha1` of the body.
+    etag: String,
+    headers: HeaderMap,
+    body: Bytes,
+}
+
+impl CachedGet {
+    /// Wraps a response that just arrived from the upstream, ready to be
+    /// replayed for a full [`FORWARD_CACHE_TTL`].
+    fn new(etag: String, headers: HeaderMap, body: Bytes) -> Self {
+        Self {
+            fresh_until: Instant::now() + FORWARD_CACHE_TTL,
+            etag,
+            headers,
+            body,
+        }
+    }
+
+    /// Restarts the TTL. Only a round-trip that proved the representation is
+    /// unchanged may call this; a failed one must leave the deadline alone so
+    /// the next request retries instead of waiting out another full TTL on a
+    /// refresh that never happened.
+    fn refresh(&mut self) {
+        self.fresh_until = Instant::now() + FORWARD_CACHE_TTL;
+    }
+}
+
+/// Keyed by path and query; the validator lives inside the entry, so a URL is
+/// always answered from the copy its caller last saw.
+static FORWARD_CACHE: LazyLock<RwLock<BTreeMap<String, CachedGet>>> =
+    LazyLock::new(|| RwLock::new(BTreeMap::new()));
+
+/// `If-None-Match` comparison (RFC 9110 §13.1.2): `*` matches everything, a
+/// list matches member-wise, and the weak prefix is ignored on both sides.
+fn if_none_match_hits(value: &str, etag: &str) -> bool {
+    fn strip_weak(value: &str) -> &str {
+        let value = value.trim();
+        value.strip_prefix("W/").unwrap_or(value).trim()
+    }
+    if value.trim() == "*" {
+        return true;
+    }
+    value
+        .split(',')
+        .any(|candidate| strip_weak(candidate) == strip_weak(etag))
+}
+
+/// The validator to hand back with a forwarded `GET`: the upstream's `ETag`
+/// when it sent one, else a quoted `sha1` of the body, so a later
+/// `If-None-Match` can be answered with `304` without re-sending the payload.
+fn forward_etag(headers: &HeaderMap, body: &[u8]) -> String {
+    if let Some(value) = headers.get(hyper::header::ETAG)
+        && let Ok(text) = value.to_str()
+        && !text.is_empty()
+    {
+        return text.to_owned();
+    }
+    let mut hasher = Sha1::new();
+    hasher.update(body);
+    let digest = hasher.finalize();
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("\"{hex}\"")
+}
+
+fn cached_get(key: &str) -> Option<CachedGet> {
+    FORWARD_CACHE.read().unwrap().get(key).cloned()
+}
+
+/// Files an entry under its path and query, evicting whatever is closest to
+/// expiring once the cache is full. The deadline is never touched here: only
+/// [`CachedGet::new`] and [`CachedGet::refresh`] hand out TTLs.
+fn store_get(key: &str, entry: &CachedGet) {
+    let mut cache = FORWARD_CACHE.write().unwrap();
+    cache.insert(key.to_owned(), entry.clone());
+    while cache.len() > FORWARD_CACHE_MAX_ENTRIES {
+        let Some(oldest) = cache
+            .iter()
+            .min_by_key(|(_, entry)| entry.fresh_until)
+            .map(|(key, _)| key.to_owned())
+        else {
+            break;
+        };
+        cache.remove(&oldest);
+    }
+}
+
+/// Answers from the cached copy: `304` when the caller's `If-None-Match`
+/// still names it, otherwise the stored headers and body.
+fn replay_get(entry: &CachedGet, caller: Option<&HeaderValue>) -> Response<Full<Bytes>> {
+    if let Some(caller) = caller
+        && caller
+            .to_str()
+            .is_ok_and(|value| if_none_match_hits(value, &entry.etag))
+    {
+        return not_modified(&entry.etag);
+    }
+    let mut builder = Response::builder().status(StatusCode::OK);
+    for (name, value) in entry.headers.iter() {
+        builder = builder.header(name.as_str(), value.as_bytes());
+    }
+    builder
+        .header(hyper::header::ETAG, entry.etag.as_str())
+        .body(Full::new(entry.body.clone()))
+        .unwrap_or_else(|_| error_json(StatusCode::BAD_GATEWAY, "cached response build"))
+}
+
+fn not_modified(etag: &str) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::NOT_MODIFIED)
+        .header(hyper::header::ETAG, etag)
+        .body(Full::new(Bytes::new()))
+        .unwrap_or_else(|_| error_json(StatusCode::BAD_GATEWAY, "not modified build"))
+}
+
+/// Forwards a `GET` behind the response cache: a fresh entry is replayed (or
+/// answered with `304` when the caller's `If-None-Match` still matches), a
+/// stale one is revalidated with the validator we handed out last time, and a
+/// failed round-trip serves the stale body rather than erroring — only a
+/// successful one earns the entry another TTL.
+async fn forward_get_from(
+    client: &reqwest::Client,
+    base: &str,
+    path_and_query: &str,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Response<Full<Bytes>> {
+    let caller = headers.get(hyper::header::IF_NONE_MATCH);
+    let cached = cached_get(path_and_query);
+    if let Some(entry) = cached.as_ref()
+        && entry.fresh_until > Instant::now()
+    {
+        debug!("cosmetics proxy: served a forwarded GET from the response cache");
+        return replay_get(entry, caller);
+    }
+    let mut upstream_headers = headers.clone();
+    if let Some(entry) = cached.as_ref()
+        && let Ok(value) = HeaderValue::from_bytes(entry.etag.as_bytes())
+    {
+        // Revalidate with *our* validator: the caller's may name an older
+        // representation and would make the upstream resend a whole body.
+        upstream_headers.insert(hyper::header::IF_NONE_MATCH, value);
+    }
+    let forwarded = forward_to(
+        client,
+        base,
+        &Method::GET,
+        path_and_query,
+        &upstream_headers,
+        body,
+    )
+    .await;
+    let response = match forwarded {
+        Ok(response) => response,
+        Err(err) => {
+            if let Some(entry) = cached.as_ref() {
+                warn!(
+                    "cosmetics proxy: forwarded GET refresh failed ({err}); \
+                     serving the cached response"
+                );
+                return replay_get(entry, caller);
+            }
+            return error_json(StatusCode::BAD_GATEWAY, &err);
+        }
+    };
+    let status =
+        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let upstream_headers = response.headers().clone();
+    if status == StatusCode::NOT_MODIFIED {
+        let Some(mut entry) = cached else {
+            // Nothing cached to revalidate against: hand the `304` through.
+            return pass_through(status, &upstream_headers, Bytes::new());
+        };
+        // The representation is unchanged, so the stored copy earns a TTL.
+        entry.refresh();
+        store_get(path_and_query, &entry);
+        return replay_get(&entry, caller);
+    }
+    let body = match response.bytes().await {
+        Ok(body) => body,
+        Err(err) => {
+            if let Some(entry) = cached.as_ref() {
+                warn!(
+                    "cosmetics proxy: forwarded GET body read failed ({err}); \
+                     serving the cached response"
+                );
+                return replay_get(entry, caller);
+            }
+            return error_json(StatusCode::BAD_GATEWAY, &format!("body: {err}"));
+        }
+    };
+    if status != StatusCode::OK {
+        let Some(entry) = cached.as_ref() else {
+            return pass_through(status, &upstream_headers, body);
+        };
+        // Failures are never cached, and never restart the TTL: the stale
+        // copy answers while the next request retries the refresh.
+        warn!(
+            "cosmetics proxy: forwarded GET answered {status}; \
+             serving the cached response"
+        );
+        return replay_get(entry, caller);
+    }
+    let mut stored_headers = HeaderMap::new();
+    for (name, value) in upstream_headers.iter() {
+        if !is_hop_by_hop(name.as_str()) && name != &hyper::header::ETAG {
+            stored_headers.append(name, value.clone());
+        }
+    }
+    let etag = forward_etag(&upstream_headers, &body);
+    let entry = CachedGet::new(etag, stored_headers, body);
+    store_get(path_and_query, &entry);
+    replay_get(&entry, caller)
 }
 
 // --------------------------------------------------------------- websocket
@@ -1061,6 +1308,8 @@ async fn run(listener: TcpListener) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn accept_matches_rfc6455_sample() {
@@ -1424,6 +1673,230 @@ mod tests {
         assert!(
             elapsed < Duration::from_secs(10),
             "the handshake must be bounded: took {elapsed:?}"
+        );
+    }
+
+    async fn body_of(response: Response<Full<Bytes>>) -> Bytes {
+        response.into_body().collect().await.unwrap().to_bytes()
+    }
+
+    fn etag_of(response: &Response<Full<Bytes>>) -> Option<&str> {
+        response
+            .headers()
+            .get(hyper::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+    }
+
+    /// Pushes an entry past its deadline so the next request has to revalidate.
+    fn expire_cached_get(key: &str) {
+        let mut cache = FORWARD_CACHE.write().unwrap();
+        let entry = cache.get_mut(key).expect("expected a cached GET");
+        entry.fresh_until = Instant::now();
+    }
+
+    /// Answers `200` with a fixed body (and its ETag), or `304` when the
+    /// request already carries that validator, counting both round-trips.
+    async fn etag_upstream(hits: Arc<AtomicUsize>, revalidated: Arc<AtomicUsize>) -> SocketAddr {
+        const ETAG: &str = "\"upstream-v1\"";
+        const BODY: &str = "{\"a\":1}";
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let hits = hits.clone();
+                let revalidated = revalidated.clone();
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut chunk = [0u8; 1024];
+                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        match stream.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&chunk[..read]),
+                        }
+                    }
+                    let head = String::from_utf8_lossy(&request).to_ascii_lowercase();
+                    hits.fetch_add(1, Ordering::Relaxed);
+                    let response = if head.contains(&format!("if-none-match: {ETAG}")) {
+                        revalidated.fetch_add(1, Ordering::Relaxed);
+                        format!(
+                            "HTTP/1.1 304 Not Modified\r\netag: {ETAG}\r\nconnection: close\r\n\r\n"
+                        )
+                    } else {
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\netag: {ETAG}\r\n\
+                             content-length: {}\r\nconnection: close\r\n\r\n{BODY}",
+                            BODY.len()
+                        )
+                    };
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.flush().await;
+                });
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn forwarded_get_replays_from_the_cache_and_revalidates_with_etag() {
+        let path = "/store?page=0";
+        FORWARD_CACHE.write().unwrap().remove(path);
+        let hits = Arc::new(AtomicUsize::new(0));
+        let revalidated = Arc::new(AtomicUsize::new(0));
+        let addr = etag_upstream(hits.clone(), revalidated.clone()).await;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let base = format!("http://{addr}");
+
+        let first = forward_get_from(&client, &base, path, &HeaderMap::new(), Bytes::new()).await;
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(etag_of(&first), Some("\"upstream-v1\""));
+        assert_eq!(body_of(first).await, Bytes::from_static(b"{\"a\":1}"));
+        assert_eq!(hits.load(Ordering::Relaxed), 1);
+
+        // A fresh entry is replayed without another round-trip…
+        let second = forward_get_from(&client, &base, path, &HeaderMap::new(), Bytes::new()).await;
+        assert_eq!(second.status(), StatusCode::OK);
+        assert_eq!(body_of(second).await, Bytes::from_static(b"{\"a\":1}"));
+        assert_eq!(
+            hits.load(Ordering::Relaxed),
+            1,
+            "a fresh entry must be replayed from memory"
+        );
+
+        // …and a caller still holding the validator gets a bodiless `304`.
+        let mut conditional = HeaderMap::new();
+        conditional.insert(
+            hyper::header::IF_NONE_MATCH,
+            HeaderValue::from_static("\"upstream-v1\""),
+        );
+        let conditional_response =
+            forward_get_from(&client, &base, path, &conditional, Bytes::new()).await;
+        assert_eq!(conditional_response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(etag_of(&conditional_response), Some("\"upstream-v1\""));
+        assert_eq!(
+            hits.load(Ordering::Relaxed),
+            1,
+            "a matching If-None-Match must not reach the upstream"
+        );
+
+        // Past the TTL the proxy revalidates with the validator it handed out…
+        expire_cached_get(path);
+        let refreshed =
+            forward_get_from(&client, &base, path, &HeaderMap::new(), Bytes::new()).await;
+        assert_eq!(refreshed.status(), StatusCode::OK);
+        assert_eq!(body_of(refreshed).await, Bytes::from_static(b"{\"a\":1}"));
+        assert_eq!(hits.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            revalidated.load(Ordering::Relaxed),
+            1,
+            "a stale entry must be revalidated with If-None-Match"
+        );
+        assert!(
+            cached_get(path).unwrap().fresh_until > Instant::now(),
+            "a successful revalidation must restart the TTL"
+        );
+
+        // …so the caller's own `304` costs one more conditional round-trip.
+        expire_cached_get(path);
+        let conditional_response =
+            forward_get_from(&client, &base, path, &conditional, Bytes::new()).await;
+        assert_eq!(conditional_response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(etag_of(&conditional_response), Some("\"upstream-v1\""));
+        assert_eq!(hits.load(Ordering::Relaxed), 3);
+        assert_eq!(revalidated.load(Ordering::Relaxed), 2);
+
+        FORWARD_CACHE.write().unwrap().remove(path);
+    }
+
+    #[tokio::test]
+    async fn a_stale_entry_answers_while_the_upstream_is_unreachable() {
+        let path = "/store?page=1";
+        let fresh_until = Instant::now(); // already past by the time we ask
+        let mut headers = HeaderMap::new();
+        headers.append(
+            hyper::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        FORWARD_CACHE.write().unwrap().insert(
+            path.to_owned(),
+            CachedGet {
+                fresh_until,
+                etag: "\"cached-v1\"".to_owned(),
+                headers,
+                body: Bytes::from_static(b"{\"cached\":true}"),
+            },
+        );
+        let addr = stall_upstream().await;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(300))
+            .build()
+            .unwrap();
+        let base = format!("http://{addr}");
+
+        let response =
+            forward_get_from(&client, &base, path, &HeaderMap::new(), Bytes::new()).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "a dead upstream must not turn a cached GET into a 502"
+        );
+        assert_eq!(etag_of(&response), Some("\"cached-v1\""));
+        assert_eq!(
+            body_of(response).await,
+            Bytes::from_static(b"{\"cached\":true}")
+        );
+        assert_eq!(
+            cached_get(path).unwrap().fresh_until,
+            fresh_until,
+            "a failed refresh must not re-stamp the TTL"
+        );
+
+        // The caller's own validator is still honoured from the stale copy.
+        let mut conditional = HeaderMap::new();
+        conditional.insert(
+            hyper::header::IF_NONE_MATCH,
+            HeaderValue::from_static("\"cached-v1\""),
+        );
+        let response = forward_get_from(&client, &base, path, &conditional, Bytes::new()).await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(etag_of(&response), Some("\"cached-v1\""));
+
+        FORWARD_CACHE.write().unwrap().remove(path);
+    }
+
+    #[test]
+    fn if_none_match_matches_star_lists_and_weak_validators() {
+        assert!(if_none_match_hits("*", "\"a\""));
+        assert!(if_none_match_hits("\"a\"", "\"a\""));
+        assert!(if_none_match_hits("W/\"a\"", "\"a\""));
+        assert!(if_none_match_hits("\"b\", \"a\"", "\"a\""));
+        assert!(if_none_match_hits(" \"a\" ", "\"a\""));
+        assert!(!if_none_match_hits("\"b\"", "\"a\""));
+        assert!(!if_none_match_hits("", "\"a\""));
+    }
+
+    #[test]
+    fn etag_prefers_the_upstream_validator_and_hashes_the_body() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            hyper::header::ETAG,
+            HeaderValue::from_static("\"upstream-v1\""),
+        );
+        assert_eq!(forward_etag(&headers, b"body"), "\"upstream-v1\"");
+
+        let empty = HeaderMap::new();
+        let etag = forward_etag(&empty, b"body");
+        assert!(etag.starts_with('"') && etag.ends_with('"'));
+        assert_eq!(etag, forward_etag(&empty, b"body"), "same body, same ETag");
+        assert_ne!(
+            etag,
+            forward_etag(&empty, b"other"),
+            "the body feeds the hash"
         );
     }
 }
