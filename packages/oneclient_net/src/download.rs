@@ -21,6 +21,7 @@ fn worth_retrying(err: &RequestError) -> bool {
         RequestError::ReqwestError(_)
             | RequestError::HashMismatch { .. }
             | RequestError::IncompleteBody { .. }
+            | RequestError::EmptyDownload { .. }
     )
 }
 
@@ -185,6 +186,17 @@ async fn download_attempt(
             source_desc: dest.display().to_string(),
             expected: declared,
             actual: received,
+        });
+    }
+
+    // Neither check above catches a zero-byte result: with no checksum and no
+    // Content-Length `declared` is None, and a Content-Length of 0 compares
+    // equal to 0 received. An empty jar in the mods folder then makes the
+    // loader abort with "zip file is empty" (AethelOnePLUS issue #1).
+    if received == 0 {
+        let _ = polyio::remove_file(dest).await;
+        return Err(RequestError::EmptyDownload {
+            source_desc: dest.display().to_string(),
         });
     }
 
