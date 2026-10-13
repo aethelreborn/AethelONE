@@ -45,6 +45,25 @@ fn cluster_lock(cluster_id: i64) -> Arc<AsyncMutex<()>> {
         .clone()
 }
 
+/// Drop a cluster's update lock once the cluster is gone.
+///
+/// The map is a process-lifetime static and `cluster_lock` only ever inserts, so
+/// every instance ever deleted would otherwise stay resident until the app exits.
+/// A poisoned lock is recovered rather than propagated: losing the map only costs
+/// the cache, which repopulates on the next lookup.
+pub fn forget_cluster(cluster_id: i64) {
+    if let Some(locks) = CLUSTER_UPDATE_LOCKS.get() {
+        match locks.lock() {
+            Ok(mut map) => {
+                map.remove(&cluster_id);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(&cluster_id);
+            }
+        }
+    }
+}
+
 #[tracing::instrument(level = "debug", skip(bundles, ctx))]
 pub async fn check_bundle_updates(
     cluster_id: i64,

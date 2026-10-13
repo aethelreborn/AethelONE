@@ -505,6 +505,9 @@ impl MutationCapability for ClusterMutation {
                             reason: err.to_string(),
                         });
                     if outcome.is_ok() {
+                        // The per-cluster bundle update lock lives in a process-lifetime
+                        // map, so release ours along with the cluster.
+                        oneclient_content::bundles::forget_cluster(*cluster_id);
                         services
                             .events
                             .signal(oneclient_events::Signal::ClustersChanged);
