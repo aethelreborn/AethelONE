@@ -848,6 +848,61 @@ mod tests {
         assert_eq!(write_buffer_size(Some(0)), DEFAULT_WRITE_BUFFER);
     }
 
+    /// `sanitize_path` is the only thing standing between a hostile archive entry name
+    /// and a write outside the destination, so assert the invariant rather than an
+    /// exact spelling: whatever comes out must stay relative and free of `..`.
+    fn assert_confined(relative: &str) {
+        let out = sanitize_path(relative);
+        assert!(
+            !out.is_absolute(),
+            "{relative:?} escaped to an absolute path: {out:?}"
+        );
+        assert!(
+            !out.components().any(|c| c == std::path::Component::ParentDir),
+            "{relative:?} escaped via a parent segment: {out:?}"
+        );
+    }
+
+    #[test]
+    fn sanitize_path_confines_traversal_entries() {
+        for entry in [
+            "../evil.jar",
+            "../../../../etc/passwd",
+            "a/../../b.jar",
+            "..\\..\\windows\\system32\\evil.dll",
+            "a/b/../../../c",
+            "./../d",
+            "a/..",
+        ] {
+            assert_confined(entry);
+        }
+    }
+
+    #[test]
+    fn sanitize_path_confines_absolute_entries() {
+        for entry in [
+            "/etc/passwd",
+            "/",
+            "/tmp/absolute.jar",
+            "\\windows\\system32\\config",
+        ] {
+            assert_confined(entry);
+        }
+    }
+
+    #[test]
+    fn sanitize_path_keeps_ordinary_entries_usable() {
+        // Not a safety net that quietly eats real mod pack layouts
+        assert_eq!(
+            sanitize_path("mods/example.jar"),
+            PathBuf::from("mods").join("example.jar")
+        );
+        assert_eq!(
+            sanitize_path("config/some pack/config.json"),
+            PathBuf::from("config").join("some pack").join("config.json")
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn a_link_target_is_stored_resolved() {
