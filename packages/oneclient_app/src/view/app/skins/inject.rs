@@ -49,6 +49,19 @@ async fn sync_inner(
         return Ok(());
     };
 
+    // CustomSkinLoader's local skin is only written for offline accounts; a
+    // premium account keeps the skin Mojang serves. Bail before doing any
+    // network or disk work rather than installing a jar that would do nothing.
+    if !account.is_offline() {
+        tracing::info!(
+            username = %account.username,
+            skin = %entry.name,
+            "active skin is only applied to offline accounts; skipping customskinloader"
+        );
+        remove_csl_jars(&mods_dir)?;
+        return Ok(());
+    }
+
     let build = match csl_build_for(&cluster.mc_version).await {
         Ok(Some(build)) => build,
         Ok(None) => {
@@ -106,9 +119,10 @@ fn write_skin(
     account: &oneclient_auth::MinecraftAccount,
     skin: &[u8],
 ) -> Result<(), String> {
-    if !account.is_offline() {
-        return Ok(());
-    }
+    debug_assert!(
+        account.is_offline(),
+        "callers must check is_offline() before writing a local skin"
+    );
     let game_dir = cluster.game_dir().map_err(|err| err.to_string())?;
     let dir = game_dir
         .join("CustomSkinLoader")
