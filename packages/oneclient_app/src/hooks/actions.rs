@@ -324,6 +324,27 @@ impl Actions {
         }
     }
 
+    pub fn toggle_favorite_cluster(&self, cluster_id: ClusterId) {
+        let mut changed = false;
+        let updated = self.mutate_settings(|settings| {
+            if let Some(pos) = settings
+                .favorite_clusters
+                .iter()
+                .position(|&id| id == cluster_id)
+            {
+                settings.favorite_clusters.remove(pos);
+            } else {
+                settings.favorite_clusters.push(cluster_id);
+            }
+            changed = true;
+        });
+        if changed {
+            if let Some(updated) = updated {
+                self.persist(updated);
+            }
+        }
+    }
+
     pub fn skip_microsoft_java(&self) {
         if let Some(updated) = self.mutate_settings(|settings| settings.skip_microsoft_java = true)
         {

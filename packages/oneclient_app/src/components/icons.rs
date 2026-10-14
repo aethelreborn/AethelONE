@@ -155,6 +155,7 @@ pub enum IconType {
     Settings04,
     Sliders04,
     Square,
+    Star01,
     Terminal,
     Trash01,
     Users01,

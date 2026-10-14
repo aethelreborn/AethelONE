@@ -14,7 +14,8 @@ use crate::components::{
 };
 use crate::hooks::{
     export_instance, import_instance, settled_or_loading, use_active_cluster_id, use_clusters,
-    use_dispatch, use_game_snapshot, use_launcher, use_version_metadata, use_view_state,
+    use_dispatch, use_game_snapshot, use_launcher, use_settings_snapshot, use_version_metadata,
+    use_view_state,
 };
 use crate::routes::Route;
 use crate::theme::colors;
@@ -123,6 +124,7 @@ impl Component for Clusters {
         let instance_modal = use_state(|| None::<InstanceAction>);
         let dispatch = use_dispatch();
         let layout = use_view_state("clusters").layout;
+        let favorites = use_settings_snapshot().settings.favorite_clusters;
         let mut body_width =
             use_state(|| window_logical_size().width - PAGE_PADDING.left() - PAGE_PADDING.right());
 
@@ -256,12 +258,18 @@ impl Component for Clusters {
             .copied()
             .filter(|l| active_filter.shows(Filter::OneClient) && groups[l].iter().any(matches))
             .collect();
-        let shown_custom = shown(&custom, sort_by, |c| {
-            active_filter.shows(Filter::Custom) && matches(c)
-        });
-        let shown_packs = shown(&packs, sort_by, |c| {
-            active_filter.shows(Filter::Modpacks) && matches(c)
-        });
+        let shown_custom = shown(
+            &custom,
+            sort_by,
+            |c| active_filter.shows(Filter::Custom) && matches(c),
+            &favorites,
+        );
+        let shown_packs = shown(
+            &packs,
+            sort_by,
+            |c| active_filter.shows(Filter::Modpacks) && matches(c),
+            &favorites,
+        );
 
         let mut available_loaders: Vec<String> =
             clusters.iter().map(|c| c.mc_loader.to_string()).collect();
@@ -475,6 +483,7 @@ impl Component for Clusters {
                 instance_modal,
                 &clusters,
                 dispatch,
+                &favorites,
             ))
             .maybe_child(instance_action_modal(instance_modal, &clusters))
             .maybe_child(create_modal(show_create))
@@ -492,9 +501,11 @@ fn instance_menu_overlay(
     mut instance_modal: State<Option<InstanceAction>>,
     clusters: &[Cluster],
     dispatch: crate::Actions,
+    favorites: &[i64],
 ) -> Option<Element> {
     let (x, y, id) = (*menu.read())?;
     let cluster = clusters.iter().find(|c| c.id == id)?;
+    let is_favorite = favorites.contains(&id);
     let dir = cluster.dir().ok();
     let mut context = ContextMenu::new(x, y)
         .open_upwards()
@@ -506,6 +517,16 @@ fn instance_menu_overlay(
         });
     }
     context = context.separator();
+    let pin_dispatch = dispatch.clone();
+    let pin_label = if is_favorite {
+        "Unpin from top"
+    } else {
+        "Pin to top"
+    };
+    context = context.action(IconType::Star01, pin_label, move |()| {
+        pin_dispatch.toggle_favorite_cluster(id);
+        menu.set(None);
+    });
     let export_dispatch = dispatch.clone();
     let export_title = cluster.name.clone();
     let export_file = cluster.folder_name.clone();
@@ -617,6 +638,7 @@ fn shown<'a>(
     list: &[&'a Cluster],
     sort: Sort,
     keep: impl Fn(&Cluster) -> bool,
+    favorites: &[i64],
 ) -> Vec<&'a Cluster> {
     let mut list: Vec<&Cluster> = list.iter().copied().filter(|c| keep(c)).collect();
     match sort {
@@ -624,6 +646,12 @@ fn shown<'a>(
         Sort::OldestFirst => list.reverse(),
         Sort::NameAsc => list.sort_by_key(|c| c.name.to_lowercase()),
         Sort::NameDesc => list.sort_by_key(|c| std::cmp::Reverse(c.name.to_lowercase())),
+    }
+    if !favorites.is_empty() {
+        let (mut pinned, rest): (Vec<&Cluster>, Vec<&Cluster>) =
+            list.into_iter().partition(|c| favorites.contains(&c.id));
+        pinned.extend(rest);
+        return pinned;
     }
     list
 }

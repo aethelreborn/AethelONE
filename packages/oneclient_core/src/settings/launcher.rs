@@ -86,6 +86,8 @@ pub struct LauncherSettings {
     pub download_speed_limit_kbps: u64,
     pub data_dir: Option<PathBuf>,
     pub previous_data_dir: Option<PathBuf>,
+    /// Cluster IDs pinned to the top of the clusters page
+    pub favorite_clusters: Vec<i64>,
 }
 
 impl LauncherSettings {
@@ -135,6 +137,7 @@ impl Default for LauncherSettings {
             download_speed_limit_kbps: 0,
             data_dir: None,
             previous_data_dir: None,
+            favorite_clusters: Vec::new(),
         }
     }
 }
@@ -163,5 +166,11 @@ mod tests {
     fn download_speed_limit_defaults_to_unlimited() {
         let legacy: LauncherSettings = serde_json::from_str("{}").expect("missing fields default");
         assert_eq!(legacy.download_speed_limit_kbps, 0);
+    }
+
+    #[test]
+    fn favorite_clusters_defaults_to_empty() {
+        let legacy: LauncherSettings = serde_json::from_str("{}").expect("missing fields default");
+        assert!(legacy.favorite_clusters.is_empty());
     }
 }
