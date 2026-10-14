@@ -1,3 +1,18 @@
+## 2.14.0 (2026-10-14)
+
+### Features
+
+- Add a Check for updates button to the Mods, Shaders and Textures toolbars: it scans the selected instance's installed content for newer versions without launching the game, and reports the result in a toast.
+- Add a command palette (Ctrl+K / Cmd+K) for jumping to pages, instances, settings sections and common actions from anywhere in the launcher.
+- Add a configurable download speed limit in Settings → API connections: set a cap in KB/s (0 means unlimited) that applies to game, Java and content downloads.
+- Import a previously exported instance: Versions page → Import instance accepts the .zip backup created by Export and recreates the instance with its settings and installed content.
+- Pin instances to the top of the Versions page: right-click an instance and choose Pin to top to keep it first in the grid and list regardless of sort order, and Unpin to put it back.
+- Serve PolyPlus from the AethelOnePLUS rolling mirror: downloads rewrite to the mirrored (cracked-uuid namebadge patched) jar when a manifest entry matches, bundle update checks track mirrored builds by their own identity, and everything falls back to the official Modrinth file whenever the mirror is unreachable.
+
+### Fixes
+
+- Fix several reliability issues: premium accounts no longer load customskinloader (it can shadow Mojang auth), zero-byte downloads are rejected instead of writing an empty file, per-cluster bundle update locks are released when an instance is deleted, and the download speed limiter no longer fails to compile on some toolchains.
+
 ## 2.13.0 (2026-10-09)
 
 ### Features
