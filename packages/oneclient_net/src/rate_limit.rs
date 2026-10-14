@@ -2,8 +2,11 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use bytes::Bytes;
 use futures_lite::Stream;
 use futures_util::StreamExt;
+
+use crate::error::RequestError;
 
 /// One-second fixed window; a boundary can briefly burst up to ~2x the limit,
 /// which is well within what a launcher user will notice
@@ -83,10 +86,9 @@ impl DownloadLimiter {
 pub fn throttle<S>(
     stream: S,
     limiter: std::sync::Arc<DownloadLimiter>,
-) -> impl Stream<Item = S::Item> + Send
+) -> impl Stream<Item = Result<Bytes, RequestError>> + Send
 where
-    S: Stream + Send,
-    S::Item: Send,
+    S: Stream<Item = Result<Bytes, RequestError>> + Send,
 {
     stream.then(move |item| {
         let limiter = std::sync::Arc::clone(&limiter);
