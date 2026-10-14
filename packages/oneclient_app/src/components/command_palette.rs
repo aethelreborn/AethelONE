@@ -120,24 +120,52 @@ fn static_commands() -> Vec<Command> {
             IconType::Announcement01,
             Route::SettingsChangelog {},
         ),
+        Command::new(
+            "Settings: Developer",
+            "experimental toggles",
+            IconType::Terminal,
+            Route::SettingsDeveloper {},
+        ),
     ]
 }
 
 fn cluster_commands(clusters: &[Cluster]) -> Vec<Command> {
-    clusters
-        .iter()
-        .map(|cluster| {
-            let loader = cluster.mc_loader.get_format_name();
-            Command::new(
-                cluster.name.clone(),
-                format!("{loader} {}", cluster.mc_version),
-                IconType::Play,
-                Route::ClusterOverview {
-                    cluster_id: cluster.id,
-                },
-            )
-        })
-        .collect()
+    let mut commands = Vec::with_capacity(clusters.len() * 5);
+    for cluster in clusters {
+        let loader = cluster.mc_loader.get_format_name();
+        let id = cluster.id;
+        commands.push(Command::new(
+            cluster.name.clone(),
+            format!("{loader} {}", cluster.mc_version),
+            IconType::Play,
+            Route::ClusterOverview { cluster_id: id },
+        ));
+        commands.push(Command::new(
+            format!("{}: Mods", cluster.name),
+            format!("{loader} {}", cluster.mc_version),
+            IconType::FilePlus02,
+            Route::ClusterMods { cluster_id: id },
+        ));
+        commands.push(Command::new(
+            format!("{}: Worlds", cluster.name),
+            format!("{loader} {}", cluster.mc_version),
+            IconType::Folder,
+            Route::ClusterWorlds { cluster_id: id },
+        ));
+        commands.push(Command::new(
+            format!("{}: Logs", cluster.name),
+            format!("{loader} {}", cluster.mc_version),
+            IconType::Terminal,
+            Route::ClusterLogs { cluster_id: id },
+        ));
+        commands.push(Command::new(
+            format!("{}: Settings", cluster.name),
+            format!("{loader} {}", cluster.mc_version),
+            IconType::Settings01,
+            Route::ClusterSettings { cluster_id: id },
+        ));
+    }
+    commands
 }
 
 /// Ctrl+K on Windows/Linux, Cmd+K on macOS
