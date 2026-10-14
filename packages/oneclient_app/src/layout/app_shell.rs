@@ -10,8 +10,8 @@ use skia_safe::sampling_options::CubicResampler;
 use crate::Route;
 use crate::components::Button;
 use crate::components::{
-    ART_PREVIEW_EDGE, AppNavbar, CodeBlock, DynamicArt, FileDropOverlay, Icon, IconType,
-    OverlayPopup, accept_drop, copy_button,
+    ART_PREVIEW_EDGE, AppNavbar, CodeBlock, CommandPalette, DynamicArt, FileDropOverlay, Icon,
+    IconType, OverlayPopup, accept_drop, copy_button, is_palette_toggle,
 };
 use crate::layout::AnimatedAppOutlet;
 use crate::use_settings_snapshot;
@@ -55,6 +55,7 @@ impl Component for AppShell {
         let mut drop_hovering = use_state(|| false);
         let drop_pending = use_state(Vec::<PathBuf>::new);
         let dropped_modpacks = use_state(Vec::<PathBuf>::new);
+        let palette_open = use_state(|| false);
 
         let game = use_game_snapshot();
 
@@ -84,6 +85,12 @@ impl Component for AppShell {
                 drop_hovering.set(false);
                 accept_drop(&e.file_paths, drop_pending, dropped_modpacks);
             })
+            .on_global_key_down(move |e: Event<KeyboardEventData>| {
+                if is_palette_toggle(&e) {
+                    let next = !*palette_open.peek();
+                    palette_open.set(next);
+                }
+            })
             .child(AppNavbar)
             .child(AppHomeBackground)
             .child(
@@ -97,6 +104,7 @@ impl Component for AppShell {
                 pending: drop_pending,
                 modpacks: dropped_modpacks,
             })
+            .child(CommandPalette::new(palette_open))
             .maybe_child(
                 game.error
                     .clone()
