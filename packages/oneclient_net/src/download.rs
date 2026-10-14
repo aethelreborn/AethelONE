@@ -144,6 +144,7 @@ async fn download_attempt(
         notify: notify.cloned(),
     };
     let stream = response.stream(options, events).await?;
+    let stream = crate::rate_limit::throttle(stream, std::sync::Arc::clone(client.limiter()));
 
     let mut hasher = expected.map(|expected| ChecksumStream::new(expected.algorithm));
     let mut received = 0u64;

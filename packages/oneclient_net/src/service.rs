@@ -8,6 +8,7 @@ use tokio::sync::Semaphore;
 
 use crate::config::NetConfig;
 use crate::error::{RequestError, body_snippet};
+use crate::rate_limit::DownloadLimiter;
 use crate::request::HttpRequest;
 use crate::response::{ResponseExt, ResponseOptions};
 
@@ -84,6 +85,9 @@ pub struct RequestClient {
     /// handles
     /// `ArcSwap` rather than a lock which would serialise requests
     config: Arc<ArcSwap<NetConfig>>,
+    /// Shared with every clone so a saved speed limit throttles in-flight
+    /// downloads too
+    limiter: Arc<DownloadLimiter>,
 }
 
 impl RequestClient {
@@ -96,7 +100,13 @@ impl RequestClient {
         self.config.load()
     }
 
+    pub(crate) fn limiter(&self) -> &Arc<DownloadLimiter> {
+        &self.limiter
+    }
+
     pub fn set_config(&self, config: NetConfig) {
+        self.limiter
+            .set_limit(config.download_speed_limit_bytes_per_sec());
         self.config.store(Arc::new(config));
     }
 
@@ -119,7 +129,10 @@ impl RequestClient {
         Ok(Self {
             client,
             semaphore: Arc::new(Semaphore::new(MAX_INFLIGHT_REQUESTS)),
-            config: Arc::new(ArcSwap::from_pointee(config)),
+            config: Arc::new(ArcSwap::from_pointee(config.clone())),
+            limiter: Arc::new(DownloadLimiter::new(
+                config.download_speed_limit_bytes_per_sec(),
+            )),
         })
     }
 }
@@ -235,6 +248,7 @@ impl RequestClient {
 
         let size_hint = res.content_length();
         let http_stream = res.stream(options, events).await?;
+        let http_stream = crate::rate_limit::throttle(http_stream, Arc::clone(&self.limiter));
         let http_stream = std::pin::pin!(http_stream);
 
         polyio::write_stream(dest, http_stream, size_hint).await?;

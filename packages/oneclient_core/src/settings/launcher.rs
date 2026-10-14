@@ -82,6 +82,8 @@ pub struct LauncherSettings {
     pub curseforge_api_key: Option<String>,
     pub custom_api_endpoint: Option<String>,
     pub custom_meta_url_base: Option<String>,
+    /// Download cap in kibibytes per second; `0` means unlimited
+    pub download_speed_limit_kbps: u64,
     pub data_dir: Option<PathBuf>,
     pub previous_data_dir: Option<PathBuf>,
 }
@@ -130,6 +132,7 @@ impl Default for LauncherSettings {
             curseforge_api_key: None,
             custom_api_endpoint: None,
             custom_meta_url_base: None,
+            download_speed_limit_kbps: 0,
             data_dir: None,
             previous_data_dir: None,
         }
@@ -154,5 +157,11 @@ mod tests {
 
         let legacy: LauncherSettings = serde_json::from_str("{}").expect("missing fields default");
         assert!(legacy.auto_update);
+    }
+
+    #[test]
+    fn download_speed_limit_defaults_to_unlimited() {
+        let legacy: LauncherSettings = serde_json::from_str("{}").expect("missing fields default");
+        assert_eq!(legacy.download_speed_limit_kbps, 0);
     }
 }
