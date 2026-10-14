@@ -55,7 +55,7 @@ impl Component for AppShell {
         let mut drop_hovering = use_state(|| false);
         let drop_pending = use_state(Vec::<PathBuf>::new);
         let dropped_modpacks = use_state(Vec::<PathBuf>::new);
-        let palette_open = use_state(|| false);
+        let mut palette_open = use_state(|| false);
 
         let game = use_game_snapshot();
 

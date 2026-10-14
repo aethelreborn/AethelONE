@@ -4,7 +4,7 @@ use oneclient_common::search::SearchQuery;
 use oneclient_core::clusters::Cluster;
 
 use crate::Route;
-use crate::components::{Icon, IconType, OverlayPopup, overlay_is_topmost};
+use crate::components::{Icon, IconType, OverlayPopup, TextInput, overlay_is_topmost};
 use crate::hooks::{settled_or_loading, use_clusters};
 use crate::theme::colors;
 use crate::ui::border_all_color;
@@ -160,7 +160,12 @@ fn run_filter(commands: &[Command], query: &str) -> Vec<Command> {
     scored.into_iter().map(|(_, command)| command).collect()
 }
 
-fn run_route(route: Route, open: State<bool>, query: State<String>, selected: State<usize>) {
+fn run_route(
+    route: Route,
+    mut open: State<bool>,
+    mut query: State<String>,
+    mut selected: State<usize>,
+) {
     open.set(false);
     query.set(String::new());
     selected.set(0);
@@ -184,7 +189,7 @@ impl CommandPalette {
 impl Component for CommandPalette {
     fn render(&self) -> impl IntoElement {
         let mut open = self.open;
-        let query = use_state(String::new);
+        let mut query = use_state(String::new);
         let mut selected = use_state(|| 0usize);
         let clusters = settled_or_loading(&use_clusters()).unwrap_or_default();
 
@@ -194,7 +199,7 @@ impl Component for CommandPalette {
 
         let mut commands = static_commands();
         commands.extend(cluster_commands(&clusters));
-        let rows = run_filter(&commands, query.read());
+        let rows = run_filter(&commands, &query.read());
 
         let total = rows.len();
         let highlight = (*selected.read()).min(total.saturating_sub(1));
