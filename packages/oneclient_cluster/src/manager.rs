@@ -197,6 +197,95 @@ impl ClusterManager {
         }
     }
 
+    /// Imports an exported instance archive as a new instance. The archive is
+    /// unpacked into a hidden staging folder first so a corrupt or foreign zip
+    /// never leaves a half-written cluster folder behind.
+    #[tracing::instrument(level = "debug", skip(self, global))]
+    pub async fn import(
+        &self,
+        global: &GameSettingsProfile,
+        zip: &std::path::Path,
+        name_override: Option<&str>,
+    ) -> ClusterResult<Cluster> {
+        let _guard = self.provisioning.lock().await;
+        self.import_core(global, zip, name_override).await
+    }
+
+    /// Callers MUST hold `self.provisioning` this does not lock
+    #[tracing::instrument(level = "debug", skip(self, global))]
+    async fn import_core(
+        &self,
+        global: &GameSettingsProfile,
+        zip: &std::path::Path,
+        name_override: Option<&str>,
+    ) -> ClusterResult<Cluster> {
+        let clusters_dir = oneclient_common::paths::clusters_dir()?;
+        let staging_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let staging =
+            clusters_dir.join(format!(".importing-{}-{staging_nanos}", std::process::id()));
+
+        if let Err(err) = polyio::create_dir_all(&staging).await {
+            return Err(ClusterError::Import(err.to_string()));
+        }
+        if let Err(err) = polyio::extract_zip(zip, &staging).await {
+            let _ = polyio::remove_dir_all(&staging).await;
+            return Err(ClusterError::Import(err.to_string()));
+        }
+
+        let Some(identity) = crate::identity::read(&staging).await else {
+            let _ = polyio::remove_dir_all(&staging).await;
+            return Err(ClusterError::Import(
+                "archive is missing .instance.json so it is not a OneLauncher instance export"
+                    .to_string(),
+            ));
+        };
+
+        let name = name_override
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| identity.name.trim());
+        crate::naming::validate_name(name, Some(crate::naming::MAX_NAME_CHARS))
+            .map_err(ClusterError::InvalidName)?;
+
+        let folder_stem = Self::sanitize_name(&cap_folder_stem(name));
+        if folder_stem.is_empty() {
+            let _ = polyio::remove_dir_all(&staging).await;
+            return Err(ClusterError::EmptyName);
+        }
+
+        let folder_name = resolve_unique_folder_name(&folder_stem).await?;
+        let cluster_path = clusters_dir.join(&folder_name);
+
+        if let Err(err) = polyio::rename(&staging, &cluster_path).await {
+            let _ = polyio::remove_dir_all(&staging).await;
+            return Err(ClusterError::Import(err.to_string()));
+        }
+
+        match create_imported_row(
+            &self.db,
+            global,
+            &identity,
+            name,
+            &folder_name,
+            &cluster_path,
+        )
+        .await
+        {
+            Ok(cluster) => {
+                tracing::info!(cluster_id = cluster.id, name = %cluster.name, "imported cluster");
+                Ok(cluster)
+            }
+            Err(err) => {
+                tracing::warn!(name = %name, error = %err, "cluster import failed, cleaning up directory");
+                let _ = polyio::remove_dir_all(&cluster_path).await;
+                Err(err)
+            }
+        }
+    }
+
     /// Callers MUST hold `self.provisioning` this does not lock
     #[tracing::instrument(level = "debug", skip(self, global))]
     async fn create_core(
@@ -727,6 +816,44 @@ async fn create_duplicate_row(
     Ok(cluster)
 }
 
+/// Registers an already-extracted archive as a new row. The profile comes from
+/// the importing launcher's global settings because a settings profile from
+/// another install does not exist here.
+async fn create_imported_row(
+    db: &DbPool,
+    global: &GameSettingsProfile,
+    identity: &crate::identity::InstanceIdentity,
+    name: &str,
+    folder_name: &str,
+    cluster_path: &std::path::Path,
+) -> ClusterResult<Cluster> {
+    let profile = create_profile_from_global(db, global, folder_name, None, None).await?;
+
+    let tags = encode_tags(&identity.tags);
+    let row = cluster_dao::insert(
+        db,
+        &NewCluster {
+            name,
+            folder_name,
+            mc_version: &identity.mc_version,
+            mc_loader: identity.mc_loader as i64,
+            mc_loader_version: identity.mc_loader_version.as_deref(),
+            setting_profile_name: Some(&profile.name),
+            stage: ClusterStage::NotReady as i64,
+            kind: identity.kind.as_i64(),
+            user_created: i64::from(true),
+            description: identity.description.as_deref(),
+            tags: &tags,
+            cover_path: identity.cover_path.as_deref(),
+        },
+    )
+    .await?;
+
+    let cluster = Cluster::try_from_row(row)?;
+    crate::identity::write(cluster_path, &identity_of(&cluster)).await;
+    Ok(cluster)
+}
+
 fn is_reserved_device_name(stem: &str) -> bool {
     let upper = stem.to_ascii_uppercase();
     match upper.as_str() {
@@ -995,5 +1122,110 @@ mod tests {
         assert!(names.contains(&"Copy Instance".to_string()));
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn import_registers_an_instance_from_an_exported_archive() {
+        let root = test_root();
+        let pool = oneclient_db::connect(root.join("oneclient.db"))
+            .await
+            .expect("open database");
+        let manager = ClusterManager::new(pool);
+
+        let global = crate::profile::GameSettingsProfile::default_global_profile();
+        let source = manager
+            .create(
+                &global,
+                crate::options::CreateClusterOptions::new(
+                    "Import Source",
+                    "1.20.4",
+                    GameLoader::Fabric,
+                )
+                .user_created(true)
+                .kind(ClusterKind::OneClient),
+            )
+            .await
+            .expect("create source cluster");
+
+        let source_dir = oneclient_common::paths::clusters_dir()
+            .unwrap()
+            .join(&source.folder_name);
+        std::fs::write(source_dir.join("marker.txt"), b"payload").unwrap();
+
+        let zip = root.join("import-roundtrip.zip");
+        crate::export::export_cluster(&source, &zip)
+            .await
+            .expect("export");
+
+        let imported = manager
+            .import(&global, &zip, None)
+            .await
+            .expect("import succeeds");
+
+        assert_ne!(imported.id, source.id, "the import gets its own row");
+        assert_eq!(imported.name, "Import Source");
+        assert_eq!(imported.mc_version, "1.20.4");
+        assert_eq!(imported.mc_loader, GameLoader::Fabric);
+        assert!(imported.user_created, "an imported instance is editable");
+
+        let imported_dir = oneclient_common::paths::clusters_dir()
+            .unwrap()
+            .join(&imported.folder_name);
+        assert_eq!(
+            std::fs::read(imported_dir.join("marker.txt")).unwrap(),
+            b"payload",
+            "the archive contents land in the new cluster folder"
+        );
+
+        let _ = std::fs::remove_dir_all(&imported_dir);
+        let _ = std::fs::remove_file(&zip);
+    }
+
+    #[tokio::test]
+    async fn import_refuses_an_archive_that_is_not_an_instance() {
+        let root = test_root();
+        let pool = oneclient_db::connect(root.join("oneclient.db"))
+            .await
+            .expect("open database");
+        let manager = ClusterManager::new(pool);
+        let global = crate::profile::GameSettingsProfile::default_global_profile();
+
+        let zip = root.join("import-not-an-instance.zip");
+        let file = std::fs::File::create(&zip).unwrap();
+        let mut writer = async_zip::tokio::write::ZipFileWriter::with_tokio(file);
+        let builder =
+            async_zip::ZipEntryBuilder::new("random.txt".into(), async_zip::Compression::Deflate);
+        let mut entry_writer = writer
+            .write_entry_stream(builder)
+            .await
+            .expect("entry writer");
+        {
+            use futures_lite::io::AsyncWriteExt;
+            entry_writer.write_all(b"hello").await.expect("write entry");
+        }
+        entry_writer.close().await.expect("close entry");
+        writer.close().await.expect("close zip");
+
+        let err = manager
+            .import(&global, &zip, None)
+            .await
+            .expect_err("a zip without .instance.json must be refused");
+        assert!(
+            err.to_string().contains(".instance.json"),
+            "the error names the missing marker file: {err}"
+        );
+
+        let staging_leftovers: Vec<_> =
+            std::fs::read_dir(oneclient_common::paths::clusters_dir().unwrap())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().starts_with(".importing-"))
+                .collect();
+        assert!(
+            staging_leftovers.is_empty(),
+            "a refused import leaves no staging folder behind"
+        );
+
+        let _ = std::fs::remove_file(&zip);
     }
 }

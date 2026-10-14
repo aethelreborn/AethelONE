@@ -13,8 +13,8 @@ use crate::components::{
     VersionCard, cluster_nav_entries, open_folder_button,
 };
 use crate::hooks::{
-    export_instance, settled_or_loading, use_active_cluster_id, use_clusters, use_dispatch,
-    use_game_snapshot, use_launcher, use_version_metadata, use_view_state,
+    export_instance, import_instance, settled_or_loading, use_active_cluster_id, use_clusters,
+    use_dispatch, use_game_snapshot, use_launcher, use_version_metadata, use_view_state,
 };
 use crate::routes::Route;
 use crate::theme::colors;
@@ -140,7 +140,7 @@ impl Component for Clusters {
                 .overflow(Overflow::Clip)
                 .padding(PAGE_PADDING)
                 .spacing(24.)
-                .child(page_header(show_create))
+                .child(page_header(show_create, dispatch.clone()))
                 .child(
                     rect()
                         .vertical()
@@ -384,7 +384,7 @@ impl Component for Clusters {
                             .height(Size::fill())
                             .content(Content::Flex)
                             .spacing(18.)
-                            .child(page_header(show_create))
+                            .child(page_header(show_create, dispatch.clone()))
                             .child(toolbar(tabs, query, inline_search.then(|| filters.clone())))
                             .maybe_child((!inline_search).then(|| {
                                 rect()
@@ -1119,7 +1119,7 @@ fn play_button(
         .text(label)
 }
 
-fn page_header(mut show_create: State<bool>) -> impl IntoElement {
+fn page_header(mut show_create: State<bool>, dispatch: crate::Actions) -> impl IntoElement {
     rect()
         .horizontal()
         .width(Size::fill())
@@ -1145,6 +1145,7 @@ fn page_header(mut show_create: State<bool>) -> impl IntoElement {
                         .color(colors::fg_secondary()),
                 ),
         )
+        .child(import_button(dispatch))
         .child(
             Button::new()
                 .primary()
@@ -1152,6 +1153,48 @@ fn page_header(mut show_create: State<bool>) -> impl IntoElement {
                 .child(Icon::new(IconType::Plus).size(16.))
                 .text("New instance"),
         )
+}
+
+/// Picks a `.zip` produced by "Export…" on any instance and registers it as a
+/// brand-new instance alongside the ones already installed.
+fn import_button(dispatch: crate::Actions) -> Element {
+    Button::new()
+        .secondary()
+        .on_press(move |_| {
+            let dispatch = dispatch.clone();
+            spawn_forever(async move {
+                let Some(file) = rfd::AsyncFileDialog::new()
+                    .set_title("Import instance")
+                    .add_filter("Instance backup", &["zip"])
+                    .pick_file()
+                    .await
+                else {
+                    return;
+                };
+                let zip = file.path().to_path_buf();
+                match import_instance(zip, None).await {
+                    Ok(cluster) => {
+                        dispatch
+                            .notify("Instance imported")
+                            .body(format!("{} is ready to play.", cluster.name))
+                            .info()
+                            .icon(IconType::DownloadCloud02)
+                            .toast_only()
+                            .send();
+                    }
+                    Err(err) => {
+                        dispatch
+                            .notify("Couldn't import instance")
+                            .body(err.to_string())
+                            .error()
+                            .send();
+                    }
+                }
+            });
+        })
+        .child(Icon::new(IconType::FolderDownload).size(16.))
+        .text("Import")
+        .into_element()
 }
 
 fn sidebar_error(width: f32) -> Element {

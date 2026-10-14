@@ -38,3 +38,22 @@ pub async fn export_instance(
     let cluster = state.clusters.get(cluster_id).await?;
     Ok(oneclient_core::export_cluster(&cluster, &dest).await?)
 }
+
+/// Unpacks a `.zip` that `export_instance` produced into a brand-new instance.
+/// Returns the freshly registered cluster so the caller can name it in a toast.
+pub async fn import_instance(
+    zip: std::path::PathBuf,
+    name_override: Option<String>,
+) -> Result<Cluster, LauncherError> {
+    let state = crate::launcher::state()?;
+    let global = state.settings.read().global_game_settings.clone();
+    let cluster = state
+        .clusters
+        .import(&global, &zip, name_override.as_deref())
+        .await?;
+    state
+        .services
+        .events
+        .signal(oneclient_events::Signal::ClustersChanged);
+    Ok(cluster)
+}

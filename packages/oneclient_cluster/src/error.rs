@@ -43,6 +43,9 @@ pub enum ClusterError {
     #[error("failed to export instance: {0}")]
     Export(String),
 
+    #[error("failed to import instance: {0}")]
+    Import(String),
+
     #[error(transparent)]
     Request(#[from] oneclient_net::RequestError),
 
