@@ -354,6 +354,18 @@ pub(super) fn toolbar_bar(
     );
     controls.push(
         Button::new()
+            .height(Size::px(34.))
+            .font_size(12.)
+            .on_press({
+                let dispatch = dispatch.clone();
+                move |_| dispatch.check_package_updates(cluster_id)
+            })
+            .child(Icon::new(IconType::RefreshCcw02).size(15.))
+            .text("Check for updates")
+            .into_element(),
+    );
+    controls.push(
+        Button::new()
             .primary()
             .height(Size::px(34.))
             .font_size(12.)

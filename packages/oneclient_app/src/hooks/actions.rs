@@ -1708,6 +1708,64 @@ impl Actions {
         }
     }
 
+    /// Re-checks the package update cache on demand so the user does not have
+    /// to launch the game just to see what is new
+    pub fn check_package_updates(&self, cluster_id: ClusterId) {
+        let actions = self.clone();
+        spawn_forever(async move {
+            let Ok(state) = launcher::state() else { return };
+
+            let result = off_ui(async move {
+                let content = state.services.content();
+                tokio::time::timeout(
+                    UPDATE_CHECK_BUDGET,
+                    oneclient_core::refresh_browser_package_updates(cluster_id, &content),
+                )
+                .await
+            })
+            .await;
+
+            match result {
+                Ok(Ok(check)) => {
+                    let pending = check.pending().len();
+                    let title = if pending == 0 {
+                        "No updates"
+                    } else {
+                        "Updates found"
+                    };
+                    actions
+                        .notify(title)
+                        .body(if pending == 0 {
+                            "All packages are up to date".to_string()
+                        } else {
+                            format!("{pending} package(s) have updates available")
+                        })
+                        .icon(IconType::RefreshCcw02)
+                        .toast_only()
+                        .send();
+                }
+                Ok(Err(err)) => {
+                    actions
+                        .notify("Update check failed")
+                        .body(err.to_string())
+                        .error()
+                        .toast_only()
+                        .send();
+                }
+                Err(_elapsed) => {
+                    actions
+                        .notify("Update check timed out")
+                        .body("The update check took too long to complete")
+                        .error()
+                        .toast_only()
+                        .send();
+                }
+            }
+
+            super::invalidate_cluster_queries().await;
+        });
+    }
+
     /// Anything unreadable falls back to the default rather than blocking the
     /// launch on a settings lookup
     async fn cluster_update_mode(
