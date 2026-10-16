@@ -26,7 +26,7 @@ pub use diagnosis::{CrashDiagnosis, diagnose};
 pub use error::GameError;
 pub use fabric::{mods_folder_argument, uses_cluster_mods_folder};
 pub use heal::clear_zeroed_files;
-pub use launch::{LaunchedGame, is_running, launch_cluster, offer_repair};
+pub use launch::{LaunchedGame, QuickPlay, is_running, launch_cluster, offer_repair};
 pub use oneclient_mc::{
     DownloadPlan, GameVersionInfo, GameVersionKind, NativesReport, PlannedLibrary, check_natives,
     confirm_incomplete_install, download_minecraft, download_version_info, game_files_missing,

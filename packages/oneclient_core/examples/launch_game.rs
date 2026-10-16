@@ -37,7 +37,7 @@ async fn main() -> LauncherResult<()> {
         .await?;
 
     println!("Launching {} ({mc_version} {loader:?})...", cluster.name);
-    let game = oneclient_core::launch_cluster(&state, cluster.id, &account, true).await?;
+    let game = oneclient_core::launch_cluster(&state, cluster.id, &account, true, None).await?;
     println!(
         "Launched cluster #{} (pid {:?}). Waiting 10s before exit...",
         game.cluster_id, game.pid

@@ -26,6 +26,8 @@ use oneclient_mc::{
     get_loader_version, resolve_minecraft_version,
 };
 
+pub use oneclient_mc::QuickPlay;
+
 pub fn is_running(state: &LauncherState, cluster_id: i64) -> bool {
     state.games.is_running(cluster_id)
 }
@@ -84,8 +86,14 @@ pub async fn launch_cluster(
     cluster_id: i64,
     account: &MinecraftAccount,
     search_for_java: bool,
+    quick_play: Option<QuickPlay>,
 ) -> LauncherResult<LaunchedGame> {
-    tracing::info!(cluster_id, search_for_java, "launching cluster");
+    tracing::info!(
+        cluster_id,
+        search_for_java,
+        ?quick_play,
+        "launching cluster"
+    );
 
     let parallel = state.settings.read().allow_parallel_running_clusters;
     if !parallel && state.games.is_active(cluster_id) {
@@ -100,7 +108,7 @@ pub async fn launch_cluster(
     // clearing it here would drop that game's kill sender and pid
     let adopted = state.games.is_active(cluster_id);
 
-    let result = start(state, cluster_id, account, search_for_java).await;
+    let result = start(state, cluster_id, account, search_for_java, quick_play).await;
 
     if result.is_err() && !adopted {
         state.games.remove(cluster_id);
@@ -118,6 +126,7 @@ async fn start(
     cluster_id: i64,
     account: &MinecraftAccount,
     search_for_java: bool,
+    quick_play: Option<QuickPlay>,
 ) -> LauncherResult<LaunchedGame> {
     let events = state.services.events.clone();
     let stage = |s: LaunchStage| {
@@ -419,6 +428,25 @@ async fn start(
         profile.force_fullscreen,
         profile.game_args.as_deref(),
     );
+
+    // The version's own quick play entries never validate outside the game's
+    // quick play flow, so the target is appended here after checking that the
+    // version really declares the argument
+    if let Some(quick_play) = quick_play.as_ref() {
+        if arguments::supports_quick_play(
+            arg_map.get(&ArgumentType::Game).map(Vec::as_slice),
+            quick_play,
+        ) {
+            tracing::debug!(cluster_id, ?quick_play, "quick play target added");
+            arguments::append_quick_play_arguments(&mut mc_args, quick_play);
+        } else {
+            tracing::warn!(
+                cluster_id,
+                ?quick_play,
+                "version predates quick play; launching into the menu instead"
+            );
+        }
+    }
 
     if let Some(reason) = run_hook(profile.hook_pre.as_deref(), &cwd).await {
         events

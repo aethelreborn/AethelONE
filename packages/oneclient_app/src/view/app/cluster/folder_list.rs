@@ -22,6 +22,7 @@ const CONTROL_H: f32 = 34.;
 const SEARCH_W: f32 = 180.;
 const IMAGE_EDGE: u32 = 128;
 const FIRST_DATAPACK_MAJOR: u32 = 13;
+const FIRST_QUICK_PLAY_MAJOR: u32 = 20;
 
 #[derive(Clone, Copy)]
 pub(super) struct RowHeights {
@@ -36,6 +37,12 @@ pub(super) const PACKAGE_ROWS: RowHeights = RowHeights {
 
 pub(crate) fn supports_datapacks(mc_version: &str) -> bool {
     parse_mc_version(mc_version).is_none_or(|p| p.major >= FIRST_DATAPACK_MAJOR)
+}
+
+/// Quick play landed in 1.20 (23w14a); unparsable version shapes are left shown
+/// and the launch skips the target if the version turns out not to know it
+pub(crate) fn supports_quick_play(mc_version: &str) -> bool {
+    parse_mc_version(mc_version).is_none_or(|p| p.major >= FIRST_QUICK_PLAY_MAJOR)
 }
 
 pub(super) fn use_game_folder_in_use(cluster: Option<&Cluster>) -> bool {

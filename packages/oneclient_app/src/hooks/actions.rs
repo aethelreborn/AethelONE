@@ -21,6 +21,7 @@ use oneclient_cluster::{
 };
 use oneclient_common::domain::{ContentType, ProviderId};
 use oneclient_content::packages::{LiveSync, LocalImportReport};
+use oneclient_core::QuickPlay;
 use oneclient_core::relocate::RelocationPlan;
 use oneclient_core::settings::LauncherSettings;
 use oneclient_core::settings::store::{save_global_profile, save_settings_and_apply};
@@ -1035,6 +1036,21 @@ impl Actions {
     }
 
     pub fn launch_cluster(&self, cluster_id: ClusterId) {
+        self.launch_cluster_with(cluster_id, None);
+    }
+
+    /// Launches the game straight into a singleplayer world instead of the
+    /// main menu; the target is ignored by versions older than 1.20
+    pub fn launch_world(&self, cluster_id: ClusterId, world: impl Into<String>) {
+        self.launch_cluster_with(
+            cluster_id,
+            Some(QuickPlay::Singleplayer {
+                world: world.into(),
+            }),
+        );
+    }
+
+    fn launch_cluster_with(&self, cluster_id: ClusterId, quick_play: Option<QuickPlay>) {
         if modpack_job_running(cluster_id) {
             self.notify("The modpack is still being set up")
                 .body("Wait for it to finish installing, then press Play again.")
@@ -1056,7 +1072,7 @@ impl Actions {
         let actions = self.clone();
         spawn_forever(async move {
             let started = Instant::now();
-            launch(&actions, cluster_id).await;
+            launch(&actions, cluster_id, quick_play).await;
 
             // An instant failure would hand the button back inside the same
             // click burst so hold it for the floor either way
@@ -2154,7 +2170,7 @@ fn group_by_cluster(mods: &[(ClusterId, OptionalModRef)]) -> Vec<(ClusterId, Vec
     grouped
 }
 
-async fn launch(actions: &Actions, cluster_id: ClusterId) {
+async fn launch(actions: &Actions, cluster_id: ClusterId, quick_play: Option<QuickPlay>) {
     let Ok(state) = launcher::state() else { return };
     let events = state.services.events.clone();
 
@@ -2212,11 +2228,14 @@ async fn launch(actions: &Actions, cluster_id: ClusterId) {
     crate::view::app::skins::inject::sync_before_launch(&state, cluster_id, &account).await;
 
     off_ui(async move {
-        if let Err(err) = oneclient_core::launch_cluster(&state, cluster_id, &account, true).await {
+        if let Err(err) =
+            oneclient_core::launch_cluster(&state, cluster_id, &account, true, quick_play.clone())
+                .await
+        {
             // A missing file is the one failure the launcher can fix itself and a
             // path inside our metadata folder gives the user nothing to act on
             if err.indicates_missing_files() {
-                repair_and_relaunch(&state, cluster_id, &account, err).await;
+                repair_and_relaunch(&state, cluster_id, &account, err, quick_play).await;
                 return;
             }
 
@@ -2233,6 +2252,7 @@ async fn repair_and_relaunch(
     cluster_id: ClusterId,
     account: &oneclient_auth::MinecraftAccount,
     original: oneclient_core::LauncherError,
+    quick_play: Option<QuickPlay>,
 ) {
     let events = state.services.events.clone();
 
@@ -2268,7 +2288,9 @@ async fn repair_and_relaunch(
     // launch that follows it
     crate::view::app::skins::inject::sync_before_launch(state, cluster_id, account).await;
 
-    if let Err(err) = oneclient_core::launch_cluster(state, cluster_id, account, true).await {
+    if let Err(err) =
+        oneclient_core::launch_cluster(state, cluster_id, account, true, quick_play).await
+    {
         tracing::error!(cluster_id, "launch failed again after repair: {err:#}");
         events.game_failed(cluster_id, format!("{err:#}"));
     }

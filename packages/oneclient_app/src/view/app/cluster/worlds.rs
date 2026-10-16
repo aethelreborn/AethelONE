@@ -25,8 +25,8 @@ use crate::utils::format_size;
 use super::cluster_not_found;
 use super::folder_list::{
     CardIcon, RowHeights, card_icon, confirm_dialog, content_box, dialog, folder_button,
-    layout_toggle, matches_search, notify_in_use, search_input, supports_datapacks, toolbar_panel,
-    use_game_folder_in_use,
+    layout_toggle, matches_search, notify_in_use, search_input, supports_datapacks,
+    supports_quick_play, toolbar_panel, use_game_folder_in_use,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +138,7 @@ impl Component for ClusterWorlds {
         };
         let shared = !cluster.uses_dedicated_dir();
         let datapacks = supports_datapacks(&cluster.mc_version);
+        let quick_play = supports_quick_play(&cluster.mc_version);
 
         let all = try_cluster_worlds(&query).unwrap_or_default();
         let needle = search.read().trim().to_lowercase();
@@ -458,6 +459,23 @@ impl Component for ClusterWorlds {
                 let duplicate_src = info.folder_name.clone();
                 let path = info.path.clone();
                 let mut context = ContextMenu::new(x, y).title(info.folder_name.clone());
+                if quick_play {
+                    let play_world = info.folder_name.clone();
+                    context = context.action(IconType::Play, "Play into this world", {
+                        let dispatch = dispatch.clone();
+                        move |()| {
+                            if in_use {
+                                dispatch
+                                    .notify("Minecraft is already running")
+                                    .body("Close the game first, then play into the world.")
+                                    .error()
+                                    .send();
+                            } else {
+                                dispatch.launch_world(cluster_id, play_world.clone());
+                            }
+                        }
+                    });
+                }
                 if datapacks {
                     context = context.action(IconType::Database01, "Data packs", move |()| {
                         open_datapacks(cluster_id, open_world.clone(), remembered)

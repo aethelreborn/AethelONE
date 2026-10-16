@@ -274,6 +274,57 @@ pub fn append_profile_game_arguments(
     args.extend(extra);
 }
 
+/// A destination the game is sent to right after its startup splash; the
+/// arguments only exist from 1.20 (23w14a) on and `supports_quick_play` reads
+/// the version's own argument list to know that rather than a hardcoded list
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuickPlay {
+    Singleplayer { world: String },
+    Multiplayer { address: String },
+}
+
+impl QuickPlay {
+    fn flag(&self) -> &'static str {
+        match self {
+            Self::Singleplayer { .. } => "--quickPlaySingleplayer",
+            Self::Multiplayer { .. } => "--quickPlayMultiplayer",
+        }
+    }
+
+    fn value(&self) -> &str {
+        match self {
+            Self::Singleplayer { world } => world,
+            Self::Multiplayer { address } => address,
+        }
+    }
+}
+
+/// The version declares its quick play arguments under rules that never
+/// validate outside the game's own quick play flow, so the flags are looked up
+/// in the raw argument list instead of the parsed one
+#[must_use]
+pub fn supports_quick_play(args: Option<&[Argument]>, quick_play: &QuickPlay) -> bool {
+    let flag = quick_play.flag();
+
+    args.is_some_and(|args| {
+        args.iter().any(|arg| match arg {
+            Argument::Ruled { value, .. } => match value {
+                ArgumentValue::Single(arg) => arg == flag,
+                ArgumentValue::Many(values) => values.iter().any(|arg| arg == flag),
+            },
+            Argument::Normal(_) => false,
+        })
+    })
+}
+
+/// Added after the version and profile arguments because the version's own
+/// quick play entries are dropped by the regular pass; this is what makes
+/// "play into this world" work
+pub fn append_quick_play_arguments(args: &mut Vec<String>, quick_play: &QuickPlay) {
+    args.push(quick_play.flag().to_string());
+    args.push(quick_play.value().to_string());
+}
+
 pub fn processor_arguments<T: AsRef<str>, S: std::hash::BuildHasher>(
     libraries_path: &Path,
     args: &[T],
@@ -596,10 +647,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use interfrost::api::minecraft::Argument;
+
     use super::{
-        HashMap, Library, Path, SidedDataEntry, ZGC_MIN_HEAP_MB, append_profile_game_arguments,
-        classpaths, drop_repeated_arguments, get_library, is_collector_flag, java_arguments,
+        HashMap, Library, Path, QuickPlay, SidedDataEntry, ZGC_MIN_HEAP_MB,
+        append_profile_game_arguments, append_quick_play_arguments, classpaths,
+        drop_repeated_arguments, get_library, is_collector_flag, java_arguments,
         minecraft_arguments, performance_flags, processor_arguments, split_custom_args,
+        supports_quick_play,
     };
     use oneclient_common::Resolution;
 
@@ -1199,6 +1254,105 @@ mod tests {
         let parsed = processor_arguments(Path::new("/libs"), &args, &data).unwrap();
 
         assert_eq!(parsed, vec!["--flag", "{NOPE}", "--after"]);
+    }
+
+    #[test]
+    fn quick_play_support_is_read_from_the_versions_own_arguments() {
+        let args: Vec<Argument> = serde_json::from_str(
+            r#"["--username", "${auth_player_name}",
+                {"rules": [{"action": "allow", "features": {"is_quick_play_singleplayer": true}}],
+                 "value": ["--quickPlaySingleplayer", "${quickPlaySingleplayer}"]},
+                {"rules": [{"action": "allow", "features": {"is_quick_play_multiplayer": true}}],
+                 "value": ["--quickPlayMultiplayer", "${quickPlayMultiplayer}"]}]"#,
+        )
+        .unwrap();
+
+        assert!(supports_quick_play(
+            Some(&args),
+            &QuickPlay::Singleplayer {
+                world: "New World".to_string()
+            }
+        ));
+        assert!(supports_quick_play(
+            Some(&args),
+            &QuickPlay::Multiplayer {
+                address: "mc.example.com".to_string()
+            }
+        ));
+    }
+
+    #[test]
+    fn a_version_without_quick_play_arguments_does_not_support_it() {
+        let args: Vec<Argument> =
+            serde_json::from_str(r#"["--username", "${auth_player_name}"]"#).unwrap();
+        let target = QuickPlay::Singleplayer {
+            world: "New World".to_string(),
+        };
+
+        assert!(!supports_quick_play(Some(&args), &target));
+        assert!(!supports_quick_play(None, &target));
+    }
+
+    #[test]
+    fn quick_play_arguments_are_appended_as_a_flag_and_value_pair() {
+        let mut args = vec!["--username".to_string(), "player".to_string()];
+
+        append_quick_play_arguments(
+            &mut args,
+            &QuickPlay::Singleplayer {
+                world: "My World".to_string(),
+            },
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--username",
+                "player",
+                "--quickPlaySingleplayer",
+                "My World"
+            ]
+        );
+
+        append_quick_play_arguments(
+            &mut args,
+            &QuickPlay::Multiplayer {
+                address: "mc.example.com".to_string(),
+            },
+        );
+        assert_eq!(args[2..], ["--quickPlayMultiplayer", "mc.example.com"]);
+    }
+
+    #[test]
+    fn ruled_quick_play_entries_stay_out_of_the_regular_pass() {
+        let args: Vec<Argument> = serde_json::from_str(
+            r#"["--username", "${auth_player_name}",
+                {"rules": [{"action": "allow", "features": {"has_custom_resolution": true}}],
+                 "value": ["--width", "${resolution_width}", "--height", "${resolution_height}"]},
+                {"rules": [{"action": "allow", "features": {"is_quick_play_singleplayer": true}}],
+                 "value": ["--quickPlaySingleplayer", "${quickPlaySingleplayer}"]}]"#,
+        )
+        .unwrap();
+        let dir = std::env::temp_dir();
+
+        let parsed = minecraft_arguments(
+            Some(&args),
+            None,
+            "token",
+            "player",
+            uuid::Uuid::nil(),
+            "1.21.4",
+            "18",
+            &dir,
+            &dir,
+            interfrost::api::minecraft::VersionType::Release,
+            Resolution::default(),
+            "arm64",
+        )
+        .unwrap();
+
+        assert!(parsed.iter().any(|a| a == "--width"));
+        assert!(!parsed.iter().any(|a| a.contains("quickPlay")));
+        assert!(!parsed.iter().any(|a| a.contains("${")));
     }
 
     #[test]
