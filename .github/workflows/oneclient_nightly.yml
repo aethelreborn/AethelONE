@@ -73,10 +73,15 @@ jobs:
       # cluster, events, auth) were never compiled by CI at all - only by
       # whoever wrote them. The workspace run keeps them honest too, and
       # --no-fail-fast reports every broken crate in one run.
+      #
+      # --test-threads=1 because the dev/test helpers in oneclient_core point
+      # process-global launcher directories at per-test temp folders, so two
+      # tests in the same binary overwrite each other's paths mid-run.
       - name: Run workspace tests
         run: >
           cargo test --workspace --no-fail-fast --
           --skip a_disabled_override_on_an_unlinked_pin_offers_enable
+          --test-threads=1
 
   build:
     permissions:
