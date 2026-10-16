@@ -197,15 +197,20 @@ pub async fn fetch_url(raw: &str) -> Result<(Bytes, bool), String> {
     Ok((bytes, slim))
 }
 
+/// Mojang names are 3-16 ASCII letters, digits or underscores; anything else
+/// cannot resolve, so the lookup is skipped before any network call.
+fn valid_mojang_name(name: &str) -> bool {
+    (3..=16).contains(&name.len())
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
 /// Resolves a Mojang player name to their current skin, exactly like the
 /// official client would fetch it.
 pub async fn fetch_by_name(raw: &str) -> Result<(Bytes, bool, String), String> {
     let name = raw.trim();
-    let valid = (3..=16).contains(&name.len())
-        && name
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
-    if !valid {
+    if !valid_mojang_name(name) {
         return Err("Mojang names are 3-16 letters, numbers or underscores".to_string());
     }
 
@@ -322,8 +327,7 @@ mod tests {
     use super::*;
 
     fn png(width: u32, height: u32, transparent_left_arm_overlay: bool) -> Vec<u8> {
-        let mut img =
-            image::RgbaImage::from_pixel(width, height, image::Rgba([255, 0, 0, 255]));
+        let mut img = image::RgbaImage::from_pixel(width, height, image::Rgba([255, 0, 0, 255]));
         if transparent_left_arm_overlay {
             img.put_pixel(43, 20, image::Rgba([0, 0, 0, 0]));
         }
@@ -358,5 +362,26 @@ mod tests {
 
         let too_small = png(32, 32, false);
         assert!(validate_skin(&too_small).is_err());
+    }
+
+    #[test]
+    fn accepts_only_plausible_mojang_names() {
+        assert!(valid_mojang_name("Darkie_Krish"));
+        assert!(valid_mojang_name("abc"));
+        assert!(valid_mojang_name("sixteen_chars_ok"));
+
+        assert!(!valid_mojang_name("ab"));
+        assert!(!valid_mojang_name("seventeen_chars_x"));
+        assert!(!valid_mojang_name("darkie krish"));
+        assert!(!valid_mojang_name("darkié"));
+        assert!(!valid_mojang_name(""));
+    }
+
+    #[test]
+    fn derives_a_display_name_from_the_file_stem() {
+        assert_eq!(file_display_name("my skin.png"), "my skin");
+        assert_eq!(file_display_name("archive.tar.gz"), "archive.tar");
+        assert_eq!(file_display_name("skin"), "skin");
+        assert_eq!(file_display_name(""), "Imported skin");
     }
 }

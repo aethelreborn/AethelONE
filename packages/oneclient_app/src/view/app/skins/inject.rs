@@ -146,7 +146,13 @@ fn skin_file_name(username: &str) -> String {
 
 fn sanitize_username(name: &str) -> String {
     name.chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '\0') { '_' } else { c })
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '\0') {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -187,11 +193,20 @@ async fn github_build() -> Result<Option<Build>, String> {
         .map_err(|err| format!("github body read failed: {err}"))?;
     let release: Value = serde_json::from_str(&text)
         .map_err(|err| format!("github response was not JSON: {err}"))?;
+    pick_github_build(&release)
+}
+
+/// The Universal jar of the newest stable GitHub release, skipping assets that
+/// are not a downloadable jar and builds known to crash Fabric on startup.
+fn pick_github_build(release: &Value) -> Result<Option<Build>, String> {
     let Some(assets) = release.get("assets").and_then(Value::as_array) else {
         return Err("github release carried no assets".to_string());
     };
     for asset in assets {
-        let filename = asset.get("name").and_then(Value::as_str).unwrap_or_default();
+        let filename = asset
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let url = asset
             .get("browser_download_url")
             .and_then(Value::as_str)
@@ -238,15 +253,21 @@ async fn modrinth_build_for(mc_version: &str) -> Result<Option<Build>, String> {
         .get()
         .ok_or_else(|| "modrinth version list unavailable".to_string())?;
 
+    Ok(pick_modrinth_build(versions, mc_version))
+}
+
+/// The newest Modrinth version of CustomSkinLoader that both ships a Universal
+/// jar and claims support for the cluster's game version, with a fabric-capable
+/// customskinloader-named jar as fallback.
+fn pick_modrinth_build(versions: &[Value], mc_version: &str) -> Option<Build> {
     let mut fallback: Option<Build> = None;
     for version in versions {
         let supported = version
             .get("game_versions")
             .and_then(Value::as_array)
             .is_some_and(|list| {
-                list.iter().any(|entry| {
-                    version_matches(mc_version, entry.as_str().unwrap_or_default())
-                })
+                list.iter()
+                    .any(|entry| version_matches(mc_version, entry.as_str().unwrap_or_default()))
             });
         if !supported {
             continue;
@@ -255,7 +276,10 @@ async fn modrinth_build_for(mc_version: &str) -> Result<Option<Build>, String> {
             continue;
         };
         for file in files {
-            let filename = file.get("filename").and_then(Value::as_str).unwrap_or_default();
+            let filename = file
+                .get("filename")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let url = file.get("url").and_then(Value::as_str).unwrap_or_default();
             if !filename.ends_with(".jar") || url.is_empty() || CSL_KNOWN_BAD.contains(&filename) {
                 continue;
@@ -265,23 +289,23 @@ async fn modrinth_build_for(mc_version: &str) -> Result<Option<Build>, String> {
                 url: url.to_string(),
             };
             if filename.starts_with(CSL_PREFIX) {
-                return Ok(Some(build()));
+                return Some(build());
             }
             // Any other CustomSkinLoader build is only acceptable when it also
             // lists fabric, so a forge-only file never lands on our clusters
             let fabric_ok = version
                 .get("loaders")
                 .and_then(Value::as_array)
-                .is_some_and(|list| {
-                    list.iter().any(|entry| entry.as_str() == Some("fabric"))
-                });
-            if fabric_ok && filename.to_lowercase().contains("customskinloader") && fallback.is_none()
+                .is_some_and(|list| list.iter().any(|entry| entry.as_str() == Some("fabric")));
+            if fabric_ok
+                && filename.to_lowercase().contains("customskinloader")
+                && fallback.is_none()
             {
                 fallback = Some(build());
             }
         }
     }
-    Ok(fallback)
+    fallback
 }
 
 /// Modrinth lists exact game versions; the dotted prefix rules keep "1.2"
@@ -291,8 +315,7 @@ fn version_matches(mc_version: &str, supported: &str) -> bool {
         return true;
     }
     let covered = |longer: &str, shorter: &str| {
-        longer.starts_with(shorter)
-            && longer.as_bytes().get(shorter.len()) == Some(&b'.')
+        longer.starts_with(shorter) && longer.as_bytes().get(shorter.len()) == Some(&b'.')
     };
     covered(mc_version, supported) || covered(supported, mc_version)
 }
@@ -328,7 +351,9 @@ fn install_jar(cached: &Path, filename: &str, mods_dir: &Path) -> Result<(), Str
     std::fs::create_dir_all(mods_dir).map_err(|err| err.to_string())?;
     remove_csl_jars_except(mods_dir, Some(filename))?;
     let target = mods_dir.join(filename);
-    let cached_len = std::fs::metadata(cached).map(|meta| meta.len()).unwrap_or(0);
+    let cached_len = std::fs::metadata(cached)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
     let installed_len = std::fs::metadata(&target).map(|meta| meta.len()).ok();
     if installed_len != Some(cached_len) {
         std::fs::copy(cached, &target).map_err(|err| err.to_string())?;
@@ -369,7 +394,22 @@ fn has_csl_jar(mods_dir: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_username, skin_file_name, version_matches};
+    use std::path::PathBuf;
+
+    use serde_json::json;
+
+    use super::{
+        has_csl_jar, install_jar, pick_github_build, pick_modrinth_build, remove_csl_jars_except,
+        sanitize_username, skin_file_name, version_matches,
+    };
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("oneclient-skins-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
+        dir
+    }
 
     #[test]
     fn skin_file_name_is_the_username_with_png_extension() {
@@ -397,5 +437,208 @@ mod tests {
         assert_eq!(sanitize_username("Darkie_Krish"), "Darkie_Krish");
         assert_eq!(sanitize_username("../evil"), ".._evil");
         assert_eq!(sanitize_username("a\\b:c"), "a_b_c");
+    }
+
+    #[test]
+    fn picks_the_universal_jar_from_github_assets() {
+        let release = json!({
+            "assets": [
+                { "name": "README.md", "browser_download_url": "https://example.com/README.md" },
+                { "name": "CustomSkinLoader_Forge-15.1.jar", "browser_download_url": "https://example.com/forge.jar" },
+                { "name": "CustomSkinLoader_Universal-15.1.jar", "browser_download_url": "https://example.com/universal.jar" }
+            ]
+        });
+        let build = pick_github_build(&release)
+            .expect("assets parse")
+            .expect("a build");
+        assert_eq!(build.filename, "CustomSkinLoader_Universal-15.1.jar");
+        assert_eq!(build.url, "https://example.com/universal.jar");
+    }
+
+    #[test]
+    fn github_selection_skips_the_known_bad_build() {
+        let release = json!({
+            "assets": [
+                { "name": "CustomSkinLoader_Universal-15.0.1.jar", "browser_download_url": "https://example.com/bad.jar" },
+                { "name": "CustomSkinLoader_Universal-15.1.jar", "browser_download_url": "https://example.com/good.jar" }
+            ]
+        });
+        let build = pick_github_build(&release)
+            .expect("assets parse")
+            .expect("a build");
+        assert_eq!(build.filename, "CustomSkinLoader_Universal-15.1.jar");
+    }
+
+    #[test]
+    fn github_selection_skips_assets_without_a_url() {
+        let release = json!({
+            "assets": [
+                { "name": "CustomSkinLoader_Universal-15.1.jar" }
+            ]
+        });
+        assert!(pick_github_build(&release).expect("assets parse").is_none());
+    }
+
+    #[test]
+    fn github_release_without_assets_is_an_error() {
+        assert!(pick_github_build(&json!({})).is_err());
+    }
+
+    #[test]
+    fn modrinth_prefers_the_universal_build() {
+        let versions = json!([
+            {
+                "game_versions": ["1.21.4"],
+                "loaders": ["fabric"],
+                "files": [
+                    { "filename": "CustomSkinLoader-fabric-15.1.jar", "url": "https://example.com/fabric.jar" },
+                    { "filename": "CustomSkinLoader_Universal-15.1.jar", "url": "https://example.com/universal.jar" }
+                ]
+            }
+        ]);
+        let versions = versions.as_array().unwrap();
+        let build = pick_modrinth_build(versions, "1.21.4").expect("a build");
+        assert_eq!(build.filename, "CustomSkinLoader_Universal-15.1.jar");
+    }
+
+    #[test]
+    fn modrinth_fallback_requires_a_fabric_loader() {
+        let forge_only = json!([
+            {
+                "game_versions": ["1.21.4"],
+                "loaders": ["forge"],
+                "files": [
+                    { "filename": "CustomSkinLoader-15.1.jar", "url": "https://example.com/forge.jar" }
+                ]
+            }
+        ]);
+        assert!(pick_modrinth_build(forge_only.as_array().unwrap(), "1.21.4").is_none());
+
+        let fabric_ok = json!([
+            {
+                "game_versions": ["1.21.4"],
+                "loaders": ["fabric"],
+                "files": [
+                    { "filename": "CustomSkinLoader-15.1.jar", "url": "https://example.com/fabric.jar" }
+                ]
+            }
+        ]);
+        let build = pick_modrinth_build(fabric_ok.as_array().unwrap(), "1.21.4").expect("a build");
+        assert_eq!(build.filename, "CustomSkinLoader-15.1.jar");
+    }
+
+    #[test]
+    fn modrinth_ignores_versions_without_support_for_the_cluster() {
+        let versions = json!([
+            {
+                "game_versions": ["1.20.1"],
+                "loaders": ["fabric"],
+                "files": [
+                    { "filename": "CustomSkinLoader_Universal-15.1.jar", "url": "https://example.com/universal.jar" }
+                ]
+            }
+        ]);
+        assert!(pick_modrinth_build(versions.as_array().unwrap(), "1.21.4").is_none());
+    }
+
+    #[test]
+    fn modrinth_refuses_the_known_bad_build() {
+        let versions = json!([
+            {
+                "game_versions": ["26.1"],
+                "loaders": ["fabric"],
+                "files": [
+                    { "filename": "CustomSkinLoader_Universal-15.0.1.jar", "url": "https://example.com/bad.jar" }
+                ]
+            }
+        ]);
+        assert!(pick_modrinth_build(versions.as_array().unwrap(), "26.1").is_none());
+    }
+
+    #[test]
+    fn modrinth_prefers_a_universal_build_over_an_earlier_fallback() {
+        let versions = json!([
+            {
+                "game_versions": ["1.21.4"],
+                "loaders": ["fabric"],
+                "files": [
+                    { "filename": "CustomSkinLoader-15.0.jar", "url": "https://example.com/old-fallback.jar" }
+                ]
+            },
+            {
+                "game_versions": ["1.21.4"],
+                "loaders": ["fabric"],
+                "files": [
+                    { "filename": "CustomSkinLoader_Universal-15.1.jar", "url": "https://example.com/universal.jar" }
+                ]
+            }
+        ]);
+        let build = pick_modrinth_build(versions.as_array().unwrap(), "1.21.4").expect("a build");
+        assert_eq!(build.filename, "CustomSkinLoader_Universal-15.1.jar");
+    }
+
+    #[test]
+    fn install_jar_replaces_other_csl_builds_and_keeps_other_mods() {
+        let mods = temp_dir("install-mods");
+        let cached = temp_dir("install-cache").join("CustomSkinLoader_Universal-15.1.jar");
+        std::fs::write(&cached, b"new-csl".to_vec()).unwrap();
+        std::fs::write(mods.join("CustomSkinLoader_Universal-15.0.jar"), b"old-csl").unwrap();
+        std::fs::write(mods.join("sodium.jar"), b"unrelated".to_vec()).unwrap();
+
+        install_jar(&cached, "CustomSkinLoader_Universal-15.1.jar", &mods).unwrap();
+
+        assert_eq!(
+            std::fs::read(mods.join("CustomSkinLoader_Universal-15.1.jar")).unwrap(),
+            b"new-csl".to_vec()
+        );
+        assert!(!mods.join("CustomSkinLoader_Universal-15.0.jar").exists());
+        assert_eq!(
+            std::fs::read(mods.join("sodium.jar")).unwrap(),
+            b"unrelated".to_vec()
+        );
+    }
+
+    #[test]
+    fn install_jar_does_not_rewrite_a_same_length_copy() {
+        let mods = temp_dir("install-same-len");
+        let cached = temp_dir("install-same-len-cache").join("CustomSkinLoader_Universal-15.1.jar");
+        std::fs::write(&cached, b"aaaaaaaa").unwrap();
+        std::fs::write(
+            mods.join("CustomSkinLoader_Universal-15.1.jar"),
+            b"bbbbbbbb".to_vec(),
+        )
+        .unwrap();
+
+        install_jar(&cached, "CustomSkinLoader_Universal-15.1.jar", &mods).unwrap();
+
+        assert_eq!(
+            std::fs::read(mods.join("CustomSkinLoader_Universal-15.1.jar")).unwrap(),
+            b"bbbbbbbb".to_vec()
+        );
+    }
+
+    #[test]
+    fn remove_csl_jars_keeps_the_requested_build_and_non_csl_files() {
+        let mods = temp_dir("remove-keeps");
+        std::fs::write(mods.join("customskinloader_16.jar"), b"lowercase").unwrap();
+        std::fs::write(mods.join("CustomSkinLoader_Universal-15.1.jar"), b"kept").unwrap();
+        std::fs::write(mods.join("CustomSkinLoader-notes.txt"), b"not a jar").unwrap();
+
+        remove_csl_jars_except(&mods, Some("CustomSkinLoader_Universal-15.1.jar")).unwrap();
+
+        assert!(!mods.join("customskinloader_16.jar").exists());
+        assert!(mods.join("CustomSkinLoader_Universal-15.1.jar").exists());
+        assert!(mods.join("CustomSkinLoader-notes.txt").exists());
+    }
+
+    #[test]
+    fn has_csl_jar_reflects_the_mods_dir() {
+        let mods = temp_dir("has-csl");
+        assert!(!has_csl_jar(&mods));
+        std::fs::write(mods.join("sodium.jar"), b"x").unwrap();
+        assert!(!has_csl_jar(&mods));
+        std::fs::write(mods.join("CustomSkinLoader_Universal-15.1.jar"), b"x").unwrap();
+        assert!(has_csl_jar(&mods));
+        assert!(!has_csl_jar(&mods.join("does-not-exist")));
     }
 }
