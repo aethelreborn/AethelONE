@@ -1,3 +1,10 @@
+## 2.15.0 (2026-10-16)
+
+### Features
+
+- Change the Minecraft version of an instance: its settings page now has a Minecraft Version row that opens a searchable picker of every game version and moves the instance over, keeping its folder, worlds, mods and settings. Instances installed from a modpack stay on their modpack's version.
+- Quick play: right-click a world on the Worlds page of an instance and choose Play into this world to start the game and load that save in one step, or hover a server on the Analytics Servers page and press Play to rejoin it on the version you last used with it (both need Minecraft 1.20 and newer).
+
 ## 2.14.0 (2026-10-14)
 
 ### Features
