@@ -335,11 +335,14 @@ jobs:
           fi
           ls -la dist
 
-      # The binary moved /usr/bin/oneclient_app from the old `one-client` package
-      # to `aethel-one`. Without Conflicts/Replaces, dpkg refuses to unpack over
-      # the old package's files and the install dies with "trying to overwrite
-      # '/usr/bin/oneclient_app', which is also in package one-client" (issue #1).
-      # Declaring the transition lets dpkg remove the old package automatically.
+      # Only the 2.8.0 .deb shipped as package `aethel-one`; every other release
+      # is `one-client` and the two share /usr/bin/oneclient_app. Without the
+      # transition dpkg refuses to unpack over the old package's files and the
+      # install dies with "trying to overwrite '/usr/bin/oneclient_app', which is
+      # also in package aethel-one" (issue #1). Declaring the transition lets
+      # dpkg remove the legacy package automatically. Never name `one-client`
+      # itself here — a package that Conflicts with itself can never be
+      # installed or upgraded.
       - name: (Linux) Declare the legacy package transition in the .deb
         if: matrix.platform == 'ubuntu-22.04'
         shell: bash
@@ -356,13 +359,21 @@ jobs:
             dpkg-deb --raw-extract "$deb" "$work/root"
             control="$work/root/DEBIAN/control"
             if ! grep -q '^Conflicts:' "$control"; then
-              printf 'Conflicts: one-client\nReplaces: one-client (<< 2.8.0)\n' >> "$control"
+              printf 'Conflicts: aethel-one\nReplaces: aethel-one\n' >> "$control"
             fi
             dpkg-deb --root-owner-group --build "$work/root" "$deb.tmp" >/dev/null
             mv "$deb.tmp" "$deb"
             rm -rf "$work"
-            echo "patched $deb"
-            dpkg-deb --field "$deb" Conflicts
+
+            # A package that Conflicts with itself can never be installed; this
+            # has regressed twice, so fail the build instead of shipping it.
+            pkg_name="$(dpkg-deb -f "$deb" Package)"
+            conflict="$(dpkg-deb -f "$deb" Conflicts | tr -d ' ')"
+            if [ "$pkg_name" = "$conflict" ]; then
+              echo "::error::$deb conflicts with itself ($pkg_name)"
+              exit 1
+            fi
+            echo "patched $deb (Conflicts: $conflict)"
           done
 
       - name: Upload unsigned executable

@@ -534,22 +534,31 @@ jobs:
             deb_unique="OneClient_${VERSION}_${OS_KEY}_${ARCH}.deb"
             cp "${deb_matches[0]}" "$OUT_DIR/$deb_unique"
 
-            # The 2.8.0 rebuild derived the package name `aethel-one` from the
-            # rebranded product name while 2.7.x installed as `one-client`; the two
-            # share /usr/bin/oneclient_app, so declare the rename in the control
-            # file. dpkg/apt then swaps the old package out instead of refusing
-            # to overwrite its files. cargo-packager cannot emit these fields, so
-            # inject them before the package is signed.
-            # NOTE: this must name the LEGACY package (`one-client`), not this
+            # Only the 2.8.0 .deb shipped as package `aethel-one`; every other
+            # release is `one-client` (package-name is pinned in Cargo.toml) and
+            # the two share /usr/bin/oneclient_app, so dpkg/apt must be told that
+            # `one-client` replaces the legacy `aethel-one` or it refuses to
+            # overwrite the old package's files. cargo-packager cannot emit these
+            # fields, so inject them before the package is signed.
+            # NOTE: this must name the LEGACY package (`aethel-one`), never this
             # package's own name — a package that Conflicts with itself can never
-            # be installed or upgraded.
+            # be installed or upgraded (2.14.0 and 2.15.0 shipped exactly that).
             ctrl="$(mktemp -d)"
             dpkg-deb -R "$OUT_DIR/$deb_unique" "$ctrl"
             if ! grep -q '^Conflicts:' "$ctrl/DEBIAN/control"; then
-              printf 'Conflicts: one-client\nReplaces: one-client (<< 2.8.0)\n' >> "$ctrl/DEBIAN/control"
+              printf 'Conflicts: aethel-one\nReplaces: aethel-one\n' >> "$ctrl/DEBIAN/control"
             fi
             dpkg-deb --root-owner-group -b "$ctrl" "$OUT_DIR/$deb_unique"
             rm -rf "$ctrl"
+
+            # A package that Conflicts with itself can never be installed; this
+            # has regressed twice, so fail the build instead of shipping it.
+            pkg_name="$(dpkg-deb -f "$OUT_DIR/$deb_unique" Package)"
+            conflict="$(dpkg-deb -f "$OUT_DIR/$deb_unique" Conflicts | tr -d ' ')"
+            if [ "$pkg_name" = "$conflict" ]; then
+              echo "::error::$deb_unique conflicts with itself ($pkg_name)"
+              exit 1
+            fi
           fi
 
           # Same treatment for the .rpm (cargo-generate-rpm names it
