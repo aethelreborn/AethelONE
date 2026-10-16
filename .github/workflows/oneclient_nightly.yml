@@ -69,6 +69,14 @@ jobs:
       - name: Run oneclient_net tests
         run: cargo test -p oneclient_net --
 
+      # The other crates' tests (core, content, mc, java, common, db, polyio,
+      # cluster, events, auth) were never compiled by CI at all - only by
+      # whoever wrote them. The workspace run keeps them honest too.
+      - name: Run workspace tests
+        run: >
+          cargo test --workspace --
+          --skip a_disabled_override_on_an_unlinked_pin_offers_enable
+
   build:
     permissions:
       contents: read
