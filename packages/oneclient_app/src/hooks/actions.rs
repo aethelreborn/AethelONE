@@ -1050,6 +1050,17 @@ impl Actions {
         );
     }
 
+    /// Launches the game straight onto a server the version has joined before;
+    /// same 1.20 floor as `launch_world`
+    pub fn launch_server(&self, cluster_id: ClusterId, address: impl Into<String>) {
+        self.launch_cluster_with(
+            cluster_id,
+            Some(QuickPlay::Multiplayer {
+                address: address.into(),
+            }),
+        );
+    }
+
     fn launch_cluster_with(&self, cluster_id: ClusterId, quick_play: Option<QuickPlay>) {
         if modpack_job_running(cluster_id) {
             self.notify("The modpack is still being set up")

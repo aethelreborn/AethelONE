@@ -185,10 +185,11 @@ pub async fn list_session_servers(
     sqlx::query_as!(
         GameSessionServerRow,
         r#"
-		SELECT session_started_at, address, port, joined_at, disconnected_at
-		FROM game_session_servers
-		WHERE session_started_at = ?
-		ORDER BY joined_at ASC
+		SELECT s.session_started_at, s.address, s.port, s.joined_at, s.disconnected_at, g.cluster_id
+		FROM game_session_servers s
+		JOIN game_sessions g ON g.started_at = s.session_started_at
+		WHERE s.session_started_at = ?
+		ORDER BY s.joined_at ASC
 		"#,
         session_started_at
     )
@@ -271,9 +272,10 @@ pub async fn all_session_servers(
     sqlx::query_as!(
         GameSessionServerRow,
         r#"
-		SELECT session_started_at, address, port, joined_at, disconnected_at
-		FROM game_session_servers
-		ORDER BY joined_at ASC
+		SELECT s.session_started_at, s.address, s.port, s.joined_at, s.disconnected_at, g.cluster_id
+		FROM game_session_servers s
+		JOIN game_sessions g ON g.started_at = s.session_started_at
+		ORDER BY s.joined_at ASC
 		"#
     )
     .fetch_all(pool)
@@ -287,7 +289,7 @@ pub async fn session_servers_for_cluster(
     sqlx::query_as!(
         GameSessionServerRow,
         r#"
-		SELECT s.session_started_at, s.address, s.port, s.joined_at, s.disconnected_at
+		SELECT s.session_started_at, s.address, s.port, s.joined_at, s.disconnected_at, g.cluster_id
 		FROM game_session_servers s
 		JOIN game_sessions g ON g.started_at = s.session_started_at
 		WHERE g.cluster_id = ?

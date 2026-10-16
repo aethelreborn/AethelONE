@@ -4,6 +4,7 @@ use std::pin::Pin;
 
 use freya::prelude::*;
 use freya::router::RouterContext;
+use oneclient_common::supports_quick_play;
 use oneclient_core::{LauncherError, WorldInfo};
 
 use crate::components::{
@@ -25,8 +26,8 @@ use crate::utils::format_size;
 use super::cluster_not_found;
 use super::folder_list::{
     CardIcon, RowHeights, card_icon, confirm_dialog, content_box, dialog, folder_button,
-    layout_toggle, matches_search, notify_in_use, search_input, supports_datapacks,
-    supports_quick_play, toolbar_panel, use_game_folder_in_use,
+    layout_toggle, matches_search, notify_in_use, search_input, supports_datapacks, toolbar_panel,
+    use_game_folder_in_use,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

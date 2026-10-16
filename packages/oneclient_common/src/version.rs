@@ -67,6 +67,14 @@ pub fn normalize_mc_version_input(version: &str) -> String {
     version.trim().to_string()
 }
 
+/// 1.20 (23w14a) introduced the quick play arguments; unparsable shapes are
+/// treated as supporting them and the launch layer skips the target if the
+/// version turns out not to know it
+#[must_use]
+pub fn supports_quick_play(version: &str) -> bool {
+    parse_mc_version(version).is_none_or(|parsed| parsed.major >= 20)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +129,16 @@ mod tests {
             assert_eq!(parsed.minor, Some(minor));
             assert_eq!(parsed.patch, patch);
         }
+    }
+
+    #[test]
+    fn quick_play_needs_1_20() {
+        assert!(supports_quick_play("1.20"));
+        assert!(supports_quick_play("1.21.5"));
+        assert!(supports_quick_play("26.1"));
+        assert!(!supports_quick_play("1.19.4"));
+        assert!(!supports_quick_play("1.7.10"));
+        assert!(supports_quick_play("23w14a"), "snapshots are left to core");
     }
 
     #[test]

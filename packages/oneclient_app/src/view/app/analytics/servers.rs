@@ -1,12 +1,15 @@
 use freya::prelude::*;
 
+use oneclient_common::supports_quick_play;
 use oneclient_core::game::ServerStat;
 
 use crate::components::{
     Button, Icon, IconType, OverlayPopup, PieChart, ScrollArea, Segment, SegmentedControl,
     ValueUnit, slice_color,
 };
-use crate::hooks::{loaded_image, use_cached_image};
+use crate::hooks::{
+    loaded_image, settled_or_loading, use_cached_image, use_clusters, use_dispatch,
+};
 use crate::theme::colors;
 use crate::ui::{ImageFallbackExt, border_all_color};
 use crate::utils::{format_duration, plural};
@@ -317,6 +320,17 @@ impl Component for ServerRow {
             mask(&display_address(s))
         };
 
+        let dispatch = use_dispatch();
+        let clusters = settled_or_loading(&use_clusters());
+        let clusters_ready = clusters.is_some();
+        let join_target = clusters.as_ref().and_then(|clusters| {
+            clusters
+                .iter()
+                .find(|c| c.id == s.last_cluster_id)
+                .map(|c| (c.id, c.name.clone(), supports_quick_play(&c.mc_version)))
+        });
+        let join_address = display_address(s);
+
         let frac = (s.total_secs as f32 / self.max_secs as f32).clamp(0., 1.);
 
         let bar = rect()
@@ -378,7 +392,38 @@ impl Component for ServerRow {
                             .font_size(12.)
                             .font_weight(FontWeight::SEMI_BOLD)
                             .color(colors::fg_primary()),
-                    ),
+                    )
+                    .maybe_child((is_hovered && clusters_ready).then(|| {
+                        let dispatch = dispatch.clone();
+                        let join_address = join_address.clone();
+                        Button::new()
+                            .ghost()
+                            .small()
+                            .on_press(move |_| match join_target.clone() {
+                                None => {
+                                    dispatch
+                                        .notify("That version is gone")
+                                        .body(format!(
+                                            "{join_address} was played on a version that no longer exists."
+                                        ))
+                                        .error()
+                                        .send();
+                                }
+                                Some((_, name, false)) => {
+                                    dispatch
+                                        .notify("Quick play needs Minecraft 1.20")
+                                        .body(format!(
+                                            "{name} predates joining straight into a server."
+                                        ))
+                                        .error()
+                                        .send();
+                                }
+                                Some((cluster_id, _, true)) => {
+                                    dispatch.launch_server(cluster_id, join_address.clone());
+                                }
+                            })
+                            .child(Icon::new(IconType::Play).size(12.))
+                    })),
             )
             .child(bar)
     }

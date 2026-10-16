@@ -327,6 +327,9 @@ pub struct ServerStat {
     pub total_secs: i64,
     pub last_played: Option<String>,
     pub is_ip: bool,
+    /// The version the latest join used; that is the one a quick join should
+    /// launch
+    pub last_cluster_id: i64,
 }
 
 fn address_is_ip(address: &str) -> bool {
@@ -339,6 +342,7 @@ pub fn aggregate_servers(rows: &[GameSessionServerRow]) -> Vec<ServerStat> {
         joins: i64,
         total_secs: i64,
         last_played: Option<String>,
+        cluster_id: i64,
     }
 
     let mut map: HashMap<String, Acc> = HashMap::new();
@@ -348,6 +352,7 @@ pub fn aggregate_servers(rows: &[GameSessionServerRow]) -> Vec<ServerStat> {
             joins: 0,
             total_secs: 0,
             last_played: None,
+            cluster_id: row.cluster_id,
         });
         acc.joins += 1;
 
@@ -370,6 +375,7 @@ pub fn aggregate_servers(rows: &[GameSessionServerRow]) -> Vec<ServerStat> {
         {
             acc.last_played = Some(row.joined_at.clone());
             acc.port = row.port;
+            acc.cluster_id = row.cluster_id;
         }
     }
 
@@ -382,6 +388,7 @@ pub fn aggregate_servers(rows: &[GameSessionServerRow]) -> Vec<ServerStat> {
             joins: acc.joins,
             total_secs: acc.total_secs,
             last_played: acc.last_played,
+            last_cluster_id: acc.cluster_id,
         })
         .collect();
 
@@ -469,12 +476,22 @@ mod tests {
     }
 
     fn server(address: &str, joined: &str, disconnected: Option<&str>) -> GameSessionServerRow {
+        server_on_cluster(address, joined, disconnected, 1)
+    }
+
+    fn server_on_cluster(
+        address: &str,
+        joined: &str,
+        disconnected: Option<&str>,
+        cluster_id: i64,
+    ) -> GameSessionServerRow {
         GameSessionServerRow {
             session_started_at: "s".into(),
             address: address.into(),
             port: Some(25565),
             joined_at: joined.into(),
             disconnected_at: disconnected.map(str::to_string),
+            cluster_id,
         }
     }
 
@@ -512,6 +529,23 @@ mod tests {
         assert_eq!(servers[1].joins, 1);
         assert_eq!(servers[1].total_secs, 1800);
         assert!(servers[1].is_ip);
+    }
+
+    #[test]
+    fn a_servers_cluster_follows_its_latest_join() {
+        let rows = vec![
+            server_on_cluster("mc.example.com", "2026-01-01T10:00:00+00:00", None, 7),
+            server_on_cluster("mc.example.com", "2026-01-02T10:00:00+00:00", None, 3),
+            server_on_cluster("mc.example.com", "2026-01-01T20:00:00+00:00", None, 5),
+        ];
+
+        let servers = aggregate_servers(&rows);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].joins, 3);
+        assert_eq!(
+            servers[0].last_cluster_id, 3,
+            "the 2026-01-02 join is the latest"
+        );
     }
 
     fn day(s: &str) -> NaiveDate {
@@ -618,6 +652,7 @@ mod tests {
             total_secs,
             last_played: None,
             is_ip: false,
+            last_cluster_id: 1,
         }
     }
 

@@ -38,6 +38,7 @@ pub struct GameSessionServerRow {
     pub port: Option<i64>,
     pub joined_at: String,
     pub disconnected_at: Option<String>,
+    pub cluster_id: i64,
 }
 
 #[derive(Debug, Clone, FromRow)]

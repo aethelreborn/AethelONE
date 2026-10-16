@@ -22,4 +22,6 @@ pub use memory::{MEMORY_HEADROOM_GB, default_mem_max, default_mem_max_for_total,
 pub use os_ext::OsExt;
 pub use patch::Patch;
 pub use search::{MatchScore, SearchQuery, normalize_query};
-pub use version::{ParsedMcVersion, VersionKey, format_mc_version, parse_mc_version};
+pub use version::{
+    ParsedMcVersion, VersionKey, format_mc_version, parse_mc_version, supports_quick_play,
+};

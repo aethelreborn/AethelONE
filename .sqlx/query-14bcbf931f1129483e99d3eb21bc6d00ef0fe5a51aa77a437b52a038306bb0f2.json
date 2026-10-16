@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n\t\tSELECT session_started_at, address, port, joined_at, disconnected_at\n\t\tFROM game_session_servers\n\t\tORDER BY joined_at ASC\n\t\t",
+  "query": "\n\t\tSELECT s.session_started_at, s.address, s.port, s.joined_at, s.disconnected_at, g.cluster_id\n\t\tFROM game_session_servers s\n\t\tJOIN game_sessions g ON g.started_at = s.session_started_at\n\t\tWHERE g.cluster_id = ?\n\t\tORDER BY s.joined_at ASC\n\t\t",
   "describe": {
     "columns": [
       {
@@ -57,18 +57,30 @@
             "name": "disconnected_at"
           }
         }
+      },
+      {
+        "name": "cluster_id",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "game_sessions",
+            "name": "cluster_id"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
       false,
       true,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "3ab373a6f0167df9b2fa3a6a2f2c6ee2a9a36d8ae0948b71369897c014acae77"
+  "hash": "14bcbf931f1129483e99d3eb21bc6d00ef0fe5a51aa77a437b52a038306bb0f2"
 }
