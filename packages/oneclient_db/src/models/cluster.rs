@@ -90,6 +90,7 @@ pub struct NewCluster<'a> {
 pub struct ClusterPatch {
     pub name: Option<String>,
     pub setting_profile_name: Option<Option<String>>,
+    pub mc_version: Option<String>,
     pub mc_loader_version: Option<Option<String>>,
     pub linked_modpack_hash: Option<Option<String>>,
     pub description: Option<Option<String>>,

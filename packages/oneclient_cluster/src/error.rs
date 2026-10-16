@@ -31,6 +31,9 @@ pub enum ClusterError {
     #[error("invalid minecraft version: {0}")]
     InvalidVersion(String),
 
+    #[error("the game version of a modpack instance is managed by its modpack")]
+    VersionLocked,
+
     #[error(transparent)]
     Logs(#[from] crate::logs::LogsError),
 

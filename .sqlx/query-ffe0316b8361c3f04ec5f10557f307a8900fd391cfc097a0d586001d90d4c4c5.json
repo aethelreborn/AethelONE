@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n\t\tUPDATE clusters\n\t\tSET name = ?,\n\t\t    setting_profile_name = ?,\n\t\t    mc_loader_version = ?,\n\t\t    linked_modpack_hash = ?,\n\t\t    description = ?,\n\t\t    tags = ?,\n\t\t    cover_path = ?\n\t\tWHERE id = ?\n\t\tRETURNING\n\t\t\tid, name, folder_name, setting_profile_name, mc_version, mc_loader,\n\t\t\tstage, mc_loader_version, created_at, last_played, overall_played, linked_modpack_hash,\n\t\t\tkind, user_created, description, tags, cover_path\n\t\t",
+  "query": "\n\t\tUPDATE clusters\n\t\tSET name = ?,\n\t\t    setting_profile_name = ?,\n\t\t    mc_loader_version = ?,\n\t\t    mc_version = ?,\n\t\t    linked_modpack_hash = ?,\n\t\t    description = ?,\n\t\t    tags = ?,\n\t\t    cover_path = ?\n\t\tWHERE id = ?\n\t\tRETURNING\n\t\t\tid, name, folder_name, setting_profile_name, mc_version, mc_loader,\n\t\t\tstage, mc_loader_version, created_at, last_played, overall_played, linked_modpack_hash,\n\t\t\tkind, user_created, description, tags, cover_path\n\t\t",
   "describe": {
     "columns": [
       {
@@ -192,7 +192,7 @@
       }
     ],
     "parameters": {
-      "Right": 8
+      "Right": 9
     },
     "nullable": [
       false,
@@ -214,5 +214,5 @@
       true
     ]
   },
-  "hash": "9e4cbbc2c299861132749196c4e248e4309c2449e181b3b9ae16e7f7b4d9e627"
+  "hash": "ffe0316b8361c3f04ec5f10557f307a8900fd391cfc097a0d586001d90d4c4c5"
 }

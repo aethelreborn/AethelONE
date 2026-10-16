@@ -356,6 +356,10 @@ impl ClusterManager {
             ensure_profile_exists(&self.db, profile_name).await?;
         }
 
+        if !update.mc_version.is_unchanged() && existing.linked_modpack_hash.is_some() {
+            return Err(ClusterError::VersionLocked);
+        }
+
         if existing.user_created {
             if let Some(raw) = update.name.as_deref()
                 && raw.trim() != existing.name
@@ -385,6 +389,7 @@ impl ClusterManager {
         let patch = ClusterPatch {
             name,
             setting_profile_name: update.setting_profile_name.into_db_patch(),
+            mc_version: update.mc_version.into_db_patch().flatten(),
             mc_loader_version: update.mc_loader_version.into_db_patch(),
             linked_modpack_hash: update.linked_modpack_hash.into_db_patch(),
             description: update.description.into_db_patch(),
@@ -1228,5 +1233,116 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&zip);
+    }
+
+    #[tokio::test]
+    async fn a_version_change_drops_the_loader_pin_and_keeps_the_folder() {
+        let root = test_root();
+        let pool = oneclient_db::connect(root.join("change-version.db"))
+            .await
+            .expect("open database");
+        let manager = ClusterManager::new(pool);
+
+        let global = crate::profile::GameSettingsProfile::default_global_profile();
+        let cluster = manager
+            .create(
+                &global,
+                crate::options::CreateClusterOptions::new(
+                    "Version Changer",
+                    "1.20.1",
+                    GameLoader::Fabric,
+                )
+                .user_created(true)
+                .kind(ClusterKind::OneClient),
+            )
+            .await
+            .expect("create cluster");
+
+        manager
+            .update(
+                cluster.id,
+                crate::options::ClusterUpdate::default().loader_version("0.15.0"),
+            )
+            .await
+            .expect("pin loader version");
+
+        let updated = manager
+            .update(
+                cluster.id,
+                crate::options::ClusterUpdate::default()
+                    .mc_version("1.21.4")
+                    .reset_loader_version(),
+            )
+            .await
+            .expect("change version");
+
+        assert_eq!(updated.mc_version, "1.21.4");
+        assert_eq!(
+            updated.mc_loader_version, None,
+            "the loader pin belongs to the old version and must not leak into the new one"
+        );
+        assert_eq!(
+            updated.folder_name, cluster.folder_name,
+            "the instance folder stays where it is"
+        );
+        assert_eq!(updated.mc_loader, GameLoader::Fabric);
+
+        let dir = oneclient_common::paths::clusters_dir()
+            .unwrap()
+            .join(&cluster.folder_name);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_modpack_instance_refuses_a_version_change() {
+        let root = test_root();
+        let pool = oneclient_db::connect(root.join("version-lock.db"))
+            .await
+            .expect("open database");
+        let manager = ClusterManager::new(pool);
+
+        let global = crate::profile::GameSettingsProfile::default_global_profile();
+        let cluster = manager
+            .create(
+                &global,
+                crate::options::CreateClusterOptions::new(
+                    "Locked Instance",
+                    "1.20.1",
+                    GameLoader::Fabric,
+                )
+                .user_created(true)
+                .kind(ClusterKind::OneClient),
+            )
+            .await
+            .expect("create cluster");
+
+        manager
+            .update(
+                cluster.id,
+                crate::options::ClusterUpdate {
+                    linked_modpack_hash: oneclient_common::Patch::Set("modpack-hash".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("link a modpack");
+
+        let err = manager
+            .update(
+                cluster.id,
+                crate::options::ClusterUpdate::default().mc_version("1.21.4"),
+            )
+            .await
+            .expect_err("a linked instance must not change version");
+
+        assert!(matches!(err, crate::error::ClusterError::VersionLocked));
+
+        let untouched = manager.get(cluster.id).await.expect("reload cluster");
+        assert_eq!(untouched.mc_version, "1.20.1");
+
+        let dir = oneclient_common::paths::clusters_dir()
+            .unwrap()
+            .join(&cluster.folder_name);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

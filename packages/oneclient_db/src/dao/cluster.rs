@@ -161,6 +161,7 @@ pub async fn update(
         .setting_profile_name
         .clone()
         .unwrap_or(existing.setting_profile_name);
+    let mc_version = patch.mc_version.as_deref().unwrap_or(&existing.mc_version);
     let mc_loader_version = patch
         .mc_loader_version
         .clone()
@@ -180,6 +181,7 @@ pub async fn update(
 		SET name = ?,
 		    setting_profile_name = ?,
 		    mc_loader_version = ?,
+		    mc_version = ?,
 		    linked_modpack_hash = ?,
 		    description = ?,
 		    tags = ?,
@@ -193,6 +195,7 @@ pub async fn update(
         name,
         setting_profile_name,
         mc_loader_version,
+        mc_version,
         linked_modpack_hash,
         description,
         tags,

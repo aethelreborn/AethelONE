@@ -20,7 +20,8 @@ use crate::layout::cluster_content;
 use crate::theme::colors;
 use crate::ui::centered_note;
 use crate::view::app::clusters::{
-    DeleteInstanceModal, DuplicateInstanceModal, EditInstanceModal, InstanceFacts,
+    ChangeVersionModal, DeleteInstanceModal, DuplicateInstanceModal, EditInstanceModal,
+    InstanceFacts,
 };
 use crate::view::app::settings::{section_header, settings_row, settings_row_disabled};
 use oneclient_core::clusters::{can_migrate_manually, rank_migration_sources};
@@ -77,6 +78,19 @@ impl Component for ClusterSettings {
             }
             .into_element()
         };
+
+        let version_row: Vec<Element> =
+            if cluster.user_created && cluster.linked_modpack_hash.is_none() {
+                vec![
+                    section_header("VERSION").into_element(),
+                    VersionRow {
+                        facts: InstanceFacts::from_cluster(&cluster),
+                    }
+                    .into_element(),
+                ]
+            } else {
+                Vec::new()
+            };
 
         let mod_loader = !cluster.lacks_mod_loader();
         let loader_section: Vec<Element> = if mod_loader {
@@ -153,6 +167,7 @@ impl Component for ClusterSettings {
                         }
                         .into_element(),
                     )
+                    .append_children(version_row)
                     .append_children(loader_section)
                     .child(section_header("SHORTCUT"))
                     .child(ShortcutRow { cluster_id }.into_element())
@@ -996,6 +1011,40 @@ impl Component for MigrateFromRow {
                 .child(picker)
                 .child(button),
         )
+    }
+}
+
+#[derive(PartialEq)]
+struct VersionRow {
+    facts: InstanceFacts,
+}
+
+impl Component for VersionRow {
+    fn render(&self) -> impl IntoElement {
+        let mut changing = use_state(|| false);
+
+        let button = Button::new()
+            .small()
+            .secondary()
+            .on_press(move |_| changing.set(true))
+            .text("Change version");
+
+        rect()
+            .vertical()
+            .width(Size::fill())
+            .child(settings_row(
+                IconType::Globe01,
+                "Minecraft Version",
+                format!(
+                    "The game version this instance runs. It is on {} right now.",
+                    self.facts.mc_version
+                ),
+                button.into_element(),
+            ))
+            .maybe_child(changing.read().then(|| {
+                ChangeVersionModal::new(self.facts.clone(), move |()| changing.set(false))
+                    .into_element()
+            }))
     }
 }
 

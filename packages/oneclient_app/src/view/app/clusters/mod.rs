@@ -3,5 +3,8 @@ mod instance;
 mod page;
 
 pub use delete_instance::DeleteInstanceModal;
-pub use instance::{CreateInstanceModal, DuplicateInstanceModal, EditInstanceModal, InstanceFacts};
+pub use instance::{
+    ChangeVersionModal, CreateInstanceModal, DuplicateInstanceModal, EditInstanceModal,
+    InstanceFacts,
+};
 pub use page::Clusters;

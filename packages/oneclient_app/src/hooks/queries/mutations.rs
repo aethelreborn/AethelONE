@@ -199,6 +199,10 @@ pub enum ClusterAction {
         cover_source: Option<PathBuf>,
         clear_cover: bool,
     },
+    ChangeVersion {
+        cluster_id: ClusterId,
+        mc_version: String,
+    },
     DuplicateInstance {
         cluster_id: ClusterId,
         name: String,
@@ -457,6 +461,39 @@ impl MutationCapability for ClusterMutation {
                     .map_err(|err| oneclient_content::ContentError::InvalidData {
                         reason: err.to_string(),
                     })
+            }
+            ClusterAction::ChangeVersion {
+                cluster_id,
+                mc_version,
+            } => {
+                if state.games.is_active(*cluster_id) {
+                    Err(oneclient_content::ContentError::InvalidData {
+                        reason: "Close the game before changing its version.".to_string(),
+                    })
+                } else {
+                    let update = oneclient_core::clusters::ClusterUpdate::default()
+                        .mc_version(mc_version.clone())
+                        .reset_loader_version();
+                    match state.clusters.update(*cluster_id, update).await {
+                        Ok(_) => {
+                            // The new version's files download through the normal install path
+                            if let Err(err) = state
+                                .clusters
+                                .set_stage(
+                                    *cluster_id,
+                                    oneclient_core::clusters::ClusterStage::NotReady,
+                                )
+                                .await
+                            {
+                                tracing::warn!(cluster_id, error = %err, "failed to reset the stage after a version change");
+                            }
+                            Ok(())
+                        }
+                        Err(err) => Err(oneclient_content::ContentError::InvalidData {
+                            reason: err.to_string(),
+                        }),
+                    }
+                }
             }
             ClusterAction::DuplicateInstance {
                 cluster_id,

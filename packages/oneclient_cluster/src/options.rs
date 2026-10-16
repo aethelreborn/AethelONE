@@ -78,6 +78,7 @@ impl CreateClusterOptions {
 pub struct ClusterUpdate {
     pub name: Option<String>,
     pub setting_profile_name: Patch<String>,
+    pub mc_version: Patch<String>,
     pub mc_loader_version: Patch<String>,
     pub linked_modpack_hash: Patch<String>,
     pub description: Patch<String>,
@@ -91,8 +92,19 @@ impl ClusterUpdate {
         self
     }
 
+    pub fn mc_version(mut self, version: impl Into<String>) -> Self {
+        self.mc_version = Patch::Set(version.into());
+        self
+    }
+
     pub fn loader_version(mut self, version: impl Into<String>) -> Self {
         self.mc_loader_version = Patch::Set(version.into());
+        self
+    }
+
+    /// Lets the next install resolve the loader's newest build for the version
+    pub fn reset_loader_version(mut self) -> Self {
+        self.mc_loader_version = Patch::Clear;
         self
     }
 }

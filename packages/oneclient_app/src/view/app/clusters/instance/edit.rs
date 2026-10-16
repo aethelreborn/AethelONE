@@ -1,14 +1,23 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use freya::prelude::*;
 use oneclient_cluster::naming::{MAX_NAME_CHARS, validate_name};
 use oneclient_common::domain::GameLoader;
 use oneclient_core::clusters::{Cluster, ClusterKind};
 
+use super::cards::{VERSION_ROW_H, VERSION_ROW_SPACING, version_row};
 use super::details::{DetailsState, details_body};
+use super::model::VersionList;
 use super::rail::{Rail, facts_card, rail, version_art};
 use super::shell::{Shell, shell};
-use crate::hooks::{ClusterAction, use_cluster_mutation};
+use crate::components::{Icon, IconType, ScrollArea, TextInput};
+use crate::hooks::{
+    ClusterAction, game_versions, settled_or_loading, use_cluster_mutation, use_game_versions,
+    use_loader_versions,
+};
+use crate::theme::colors;
+use crate::ui::centered_note;
 
 #[derive(Clone, PartialEq)]
 pub struct InstanceFacts {
@@ -160,6 +169,171 @@ impl Component for EditInstanceModal {
                     cover_source: state.cover.read().clone(),
                     clear_cover: *state.cover_cleared.read(),
                 });
+                close_save.call(());
+            })
+            .into(),
+        })
+    }
+}
+
+#[derive(PartialEq)]
+pub struct ChangeVersionModal {
+    facts: InstanceFacts,
+    on_close: EventHandler<()>,
+}
+
+impl ChangeVersionModal {
+    pub fn new(facts: InstanceFacts, on_close: impl Into<EventHandler<()>>) -> Self {
+        Self {
+            facts,
+            on_close: on_close.into(),
+        }
+    }
+}
+
+impl Component for ChangeVersionModal {
+    fn render(&self) -> impl IntoElement {
+        let mutation = use_cluster_mutation();
+        let cluster_id = self.facts.cluster_id;
+        let current = self.facts.mc_version.clone();
+        let loader = self.facts.mc_loader;
+
+        let mut picked = use_state(|| None::<String>);
+        let mut query = use_state(String::new);
+
+        // Empty search shows the release line; anything else filters every build
+        let all = game_versions(&use_game_versions());
+        let needle = query.read().trim().to_lowercase();
+        let visible: Arc<[u32]> = all
+            .as_ref()
+            .map(|all| {
+                all.iter()
+                    .enumerate()
+                    .filter(|(_, entry)| {
+                        if needle.is_empty() {
+                            entry.kind.is_release()
+                        } else {
+                            entry.id.to_lowercase().contains(&needle)
+                        }
+                    })
+                    .map(|(index, _)| index as u32)
+                    .collect::<Vec<u32>>()
+                    .into()
+            })
+            .unwrap_or_else(|| Arc::from([]));
+        let list = all.clone().map(|all| VersionList::Catalogue {
+            all,
+            visible: visible.clone(),
+        });
+
+        let picked_version = picked.read().clone();
+        let probe = picked_version.clone().unwrap_or_default();
+        let loader_support = if loader == GameLoader::Vanilla || picked_version.is_none() {
+            Some(true)
+        } else {
+            settled_or_loading(&use_loader_versions(probe, loader))
+                .map(|versions| !versions.is_empty())
+        };
+
+        let changed = picked_version
+            .as_deref()
+            .is_some_and(|version| version != current);
+        let ready = changed && loader_support == Some(true);
+
+        let shown = picked_version.clone().unwrap_or_else(|| current.clone());
+        let mods_warning = changed.then(|| {
+            format!("Mods built for {current} may not load on {shown} — check them before playing.")
+        });
+
+        let body = rect()
+            .vertical()
+            .width(Size::fill())
+            .height(Size::fill())
+            .spacing(12.)
+            .child(
+                TextInput::new(query)
+                    .placeholder("Search versions")
+                    .width(Size::fill())
+                    .leading(
+                        Icon::new(IconType::SearchMd)
+                            .size(14.)
+                            .color(colors::fg_secondary())
+                            .into_element(),
+                    ),
+            )
+            .child(match list {
+                None => centered_note("Loading versions..."),
+                Some(list) if list.is_empty() => centered_note("No versions match that search."),
+                Some(list) => {
+                    let count = list.len();
+                    let selected = picked_version.clone();
+                    ScrollArea::new()
+                        .width(Size::fill())
+                        .height(Size::fill())
+                        .scrollbar_gutter(true)
+                        .lazy(count, VERSION_ROW_H, VERSION_ROW_SPACING, move |index| {
+                            let Some(row) = list.row(index) else {
+                                return rect().into_element();
+                            };
+                            let id = row.id.clone();
+                            let is_selected = selected.as_deref() == Some(row.id.as_str());
+                            version_row(
+                                &row,
+                                is_selected,
+                                (move |()| picked.set(Some(id.clone()))).into(),
+                            )
+                        })
+                        .into_element()
+                }
+            })
+            .into_element();
+
+        let art = version_art(Some(&shown), Some(loader));
+
+        let close_x = self.on_close.clone();
+        let close_cancel = self.on_close.clone();
+        let close_save = self.on_close.clone();
+
+        shell(Shell {
+            rail: rail(Rail {
+                art,
+                title: self.facts.name.clone(),
+                subtitle: if changed {
+                    format!("{current} → {shown}")
+                } else {
+                    format!("Currently on {current}")
+                },
+                card: facts_card(vec![
+                    ("Type", kind_label(self.facts.kind).to_string()),
+                    ("Version", current.clone()),
+                    ("Loader", loader.to_string()),
+                ]),
+                tags: Vec::new(),
+            }),
+            eyebrow: Some("Change version".to_string()),
+            title: "Move this instance to another version".to_string(),
+            subtitle: mods_warning.unwrap_or_else(|| {
+                "Everything in the instance stays — worlds, mods and settings included.".to_string()
+            }),
+            body,
+            scrolls_itself: false,
+            note: if loader_support == Some(false) {
+                format!("{loader} has no builds for {shown} yet — pick another version.")
+            } else {
+                "The new version's files download automatically the next time you play.".to_string()
+            },
+            secondary_label: "Cancel".to_string(),
+            primary_label: "Change version".to_string(),
+            primary_enabled: ready,
+            on_close: (move |()| close_x.call(())).into(),
+            on_secondary: (move |()| close_cancel.call(())).into(),
+            on_primary: (move |()| {
+                if let Some(version) = picked_version.clone() {
+                    mutation.mutate(ClusterAction::ChangeVersion {
+                        cluster_id,
+                        mc_version: version,
+                    });
+                }
                 close_save.call(());
             })
             .into(),
