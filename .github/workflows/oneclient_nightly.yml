@@ -71,10 +71,11 @@ jobs:
 
       # The other crates' tests (core, content, mc, java, common, db, polyio,
       # cluster, events, auth) were never compiled by CI at all - only by
-      # whoever wrote them. The workspace run keeps them honest too.
+      # whoever wrote them. The workspace run keeps them honest too, and
+      # --no-fail-fast reports every broken crate in one run.
       - name: Run workspace tests
         run: >
-          cargo test --workspace --
+          cargo test --workspace --no-fail-fast --
           --skip a_disabled_override_on_an_unlinked_pin_offers_enable
 
   build:

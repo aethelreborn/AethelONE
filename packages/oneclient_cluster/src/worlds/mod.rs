@@ -504,6 +504,17 @@ mod tests {
 
     use super::*;
 
+    /// Every test here seeds worlds in the same crate-wide "alpha" cluster;
+    /// without this lock one test's seeded worlds leak into another's
+    /// exact-match assertions.
+    static WORLDS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        WORLDS_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn test_root() -> &'static Path {
         crate::test_data::data_dir()
     }
@@ -555,6 +566,7 @@ mod tests {
 
     #[tokio::test]
     async fn rename_moves_the_world_folder_into_a_new_name() {
+        let _guard = lock();
         let root = test_root();
         std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
         let seed = seed_world("alpha_world");
@@ -571,11 +583,12 @@ mod tests {
         assert!(renamed.join("data/region.dat").is_file());
 
         assert_eq!(sorted_world_names(&cluster), vec!["beta_world".to_string()]);
-        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(root.join("clusters/alpha"));
     }
 
     #[tokio::test]
     async fn duplicate_copies_the_world_folder_under_a_new_name() {
+        let _guard = lock();
         let root = test_root();
         std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
         let _seed = seed_world("dup_world");
@@ -597,11 +610,12 @@ mod tests {
             sorted_world_names(&cluster),
             vec!["dup_world".to_string(), "dup_world_copy".to_string()]
         );
-        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(root.join("clusters/alpha"));
     }
 
     #[tokio::test]
     async fn rename_and_duplicate_refuse_existing_or_invalid_targets() {
+        let _guard = lock();
         let root = test_root();
         std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
         seed_world("first");
@@ -629,11 +643,12 @@ mod tests {
             .await
             .expect("renaming to the current name is a no-op");
 
-        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(root.join("clusters/alpha"));
     }
 
     #[tokio::test]
     async fn backup_then_restore_roundtrips_a_world() {
+        let _guard = lock();
         let root = test_root();
         std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
         seed_world("roundtrip");
@@ -659,11 +674,12 @@ mod tests {
         );
         assert!(sorted_world_names(&cluster).contains(&"roundtrip_restored".to_string()));
 
-        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(root.join("clusters/alpha"));
     }
 
     #[tokio::test]
     async fn restore_refuses_existing_names_and_promotes_a_nested_world_folder() {
+        let _guard = lock();
         let root = test_root();
         std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
         seed_world("taken");
@@ -699,11 +715,12 @@ mod tests {
             b"regions"
         );
 
-        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(root.join("clusters/alpha"));
     }
 
     #[tokio::test]
     async fn restore_rejects_an_empty_or_missing_archive() {
+        let _guard = lock();
         let root = test_root();
         std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
         let cluster = cluster();
@@ -721,6 +738,6 @@ mod tests {
             Err(ClusterError::Worlds(WorldsError::Restore(_)))
         ));
 
-        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(root.join("clusters/alpha"));
     }
 }
