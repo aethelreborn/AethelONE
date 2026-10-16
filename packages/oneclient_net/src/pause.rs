@@ -122,7 +122,7 @@ mod tests {
             gate.clone(),
         ));
 
-        let mut reader = tokio::spawn(async move { stream.next().await.map(|item| item.is_ok()) });
+        let reader = tokio::spawn(async move { stream.next().await.map(|item| item.is_ok()) });
         tokio::task::yield_now().await;
 
         assert!(

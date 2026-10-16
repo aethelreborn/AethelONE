@@ -1191,7 +1191,7 @@ mod tests {
         let global = crate::profile::GameSettingsProfile::default_global_profile();
 
         let zip = root.join("import-not-an-instance.zip");
-        let file = std::fs::File::create(&zip).unwrap();
+        let file = tokio::fs::File::create(&zip).await.unwrap();
         let mut writer = async_zip::tokio::write::ZipFileWriter::with_tokio(file);
         let builder =
             async_zip::ZipEntryBuilder::new("random.txt".into(), async_zip::Compression::Deflate);
