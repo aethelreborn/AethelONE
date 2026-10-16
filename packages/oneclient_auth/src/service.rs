@@ -239,10 +239,6 @@ impl AuthService {
         self.store.lock().await.corrupt_refresh_token(id).await
     }
 
-    pub async fn has_microsoft_account(&self) -> bool {
-        self.store.lock().await.has_microsoft_account()
-    }
-
     fn refresh_guard(&self, id: Uuid) -> Arc<Mutex<()>> {
         Arc::clone(
             self.refresh_guards
@@ -383,10 +379,8 @@ impl AuthService {
             Err(err) => return Err(err),
         };
 
-        if account.is_offline() && !self.has_microsoft_account().await {
-            return Err(AuthError::OfflineRequiresMicrosoft);
-        }
-
+        // Offline accounts deliberately need no Microsoft account in the store
+        // (fork feature: they work fully standalone)
         Ok(account)
     }
 
