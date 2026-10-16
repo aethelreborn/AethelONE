@@ -27,13 +27,15 @@ pub async fn clear_zeroed_mods(cluster_dir: &Path) -> usize {
     let mods_dir = cluster_dir.join(ContentType::Mod.folder_name());
 
     tokio::task::spawn_blocking(move || {
-        let cleared = sweep_dir(&mods_dir, true);
+        // remove_empty: a zero-byte jar is never valid and makes the loader
+        // abort with "zip file is empty" (AethelOnePLUS issue #1).
+        let cleared = sweep_dir(&mods_dir, true, true);
 
         if cleared > 0 {
             tracing::info!(
                 cleared,
                 mods_dir = %mods_dir.display(),
-                "cleared zero-filled files; affected mods will regenerate defaults"
+                "cleared empty or zero-filled files; affected mods will regenerate defaults"
             );
         }
 
@@ -48,21 +50,23 @@ pub async fn clear_zeroed_files(game_dir: &Path) -> usize {
     let game_dir = game_dir.to_path_buf();
 
     tokio::task::spawn_blocking(move || {
-        let mut cleared = sweep_dir(&game_dir, false);
+        // The general sweep leaves zero-byte files alone: an empty config file
+        // can be meaningful, but empty content (mods, packs, shaders) cannot.
+        let mut cleared = sweep_dir(&game_dir, false, false);
 
         for dir in SWEPT_DIRS {
-            cleared += sweep_dir(&game_dir.join(dir), true);
+            cleared += sweep_dir(&game_dir.join(dir), true, false);
         }
 
         for (content_type, recurse) in SWEPT_CONTENT {
-            cleared += sweep_dir(&game_dir.join(content_type.folder_name()), recurse);
+            cleared += sweep_dir(&game_dir.join(content_type.folder_name()), recurse, true);
         }
 
         if cleared > 0 {
             tracing::info!(
                 cleared,
                 game_dir = %game_dir.display(),
-                "cleared zero-filled files; affected mods will regenerate defaults"
+                "cleared empty or zero-filled files; affected mods will regenerate defaults"
             );
         }
 
@@ -72,7 +76,7 @@ pub async fn clear_zeroed_files(game_dir: &Path) -> usize {
     .unwrap_or(0)
 }
 
-fn sweep_dir(root: &Path, recurse: bool) -> usize {
+fn sweep_dir(root: &Path, recurse: bool, remove_empty: bool) -> usize {
     let mut cleared = 0usize;
     let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
 
@@ -95,22 +99,32 @@ fn sweep_dir(root: &Path, recurse: bool) -> usize {
                 continue;
             }
 
-            if !file_type.is_file() || !worth_probing(&path) || !is_zeroed(&path) {
+            if !file_type.is_file() || !worth_probing(&path) {
                 continue;
             }
+
+            let zeroed = is_zeroed(&path);
+            let empty = remove_empty && is_empty_file(&path);
+
+            if !zeroed && !empty {
+                continue;
+            }
+
+            let reason = if zeroed {
+                "zero-filled file left by an unclean shutdown"
+            } else {
+                "empty file, most likely a failed or interrupted download"
+            };
 
             match fs::remove_file(&path) {
                 Ok(()) => {
                     cleared += 1;
-                    tracing::warn!(
-                        file = %path.display(),
-                        "removed zero-filled file left by an unclean shutdown"
-                    );
+                    tracing::warn!(file = %path.display(), "removed {reason}");
                 }
                 Err(err) => tracing::warn!(
                     file = %path.display(),
                     error = %err,
-                    "failed to remove zero-filled file"
+                    "failed to remove {reason}"
                 ),
             }
         }
@@ -142,6 +156,12 @@ fn worth_probing(path: &Path) -> bool {
                 .iter()
                 .any(|skip| ext.eq_ignore_ascii_case(skip))
         })
+}
+
+fn is_empty_file(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|meta| meta.is_file() && meta.len() == 0)
+        .unwrap_or(false)
 }
 
 fn is_zeroed(path: &Path) -> bool {
@@ -176,6 +196,37 @@ fn is_zeroed(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sweep_removes_empty_files_only_when_asked_and_always_removes_zero_filled() {
+        let dir = std::env::temp_dir().join(format!("heal-sweep-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let empty = dir.join("mod.jar");
+        fs::write(&empty, b"").unwrap();
+
+        let zero_filled = dir.join("corrupt.jar");
+        fs::write(&zero_filled, [0u8; 128]).unwrap();
+
+        let good = dir.join("fine.jar");
+        fs::write(&good, b"not empty").unwrap();
+
+        // Empty files survive a sweep that does not ask for their removal;
+        // zero-filled ones never do.
+        assert_eq!(sweep_dir(&dir, true, false), 1);
+        assert!(empty.exists());
+        assert!(!zero_filled.exists());
+
+        // When asked, the empty file goes too and the healthy one stays.
+        fs::write(&zero_filled, [0u8; 128]).unwrap();
+        assert_eq!(sweep_dir(&dir, true, true), 2);
+        assert!(!empty.exists());
+        assert!(!zero_filled.exists());
+        assert!(good.exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn bulk_names_match_whole_words_only() {
