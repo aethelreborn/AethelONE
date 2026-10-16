@@ -251,3 +251,123 @@ pub async fn fetch_verified(
 
     Ok(bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// Answers `count` sequential connections with the same raw response.
+    async fn serve(listener: TcpListener, count: usize, response: String) {
+        for _ in 0..count {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 512];
+            loop {
+                let Ok(read) = socket.read(&mut chunk).await else {
+                    break;
+                };
+                if read == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..read]);
+                if buf.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        }
+    }
+
+    fn scratch_dir(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("oneclient-net-{}-{name}", std::process::id()))
+    }
+
+    async fn run_download(
+        response: String,
+        attempts: usize,
+        name: &str,
+    ) -> (
+        Result<(), RequestError>,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/file.jar", listener.local_addr().unwrap());
+        let server = tokio::spawn(serve(listener, attempts, response));
+
+        let client = RequestClient::new(crate::config::NetConfig::default()).unwrap();
+        let (events, _rx) = EventBus::channel();
+        let dir = scratch_dir(name);
+        polyio::create_dir_all(&dir).await.unwrap();
+        let dest = dir.join("file.jar");
+
+        let result = download_verified(&client, &events, &url, &dest, None, 0, None).await;
+        server.abort();
+        (result, dir, dest)
+    }
+
+    /// AethelOnePLUS issue #1: an empty 200 left a zero-byte jar on disk that
+    /// the loader aborted on. `EmptyDownload` is retryable, so all three
+    /// attempts must fail the same way and nothing may remain.
+    #[tokio::test]
+    async fn a_zero_byte_body_is_rejected_and_leaves_nothing_behind() {
+        let (result, dir, dest) = run_download(
+            "HTTP/1.1 200 OK\r\nconnection: close\r\n\r\n".to_string(),
+            3,
+            "empty",
+        )
+        .await;
+
+        let err = result.expect_err("a 200 with no body must fail");
+        assert!(
+            matches!(err, RequestError::EmptyDownload { .. }),
+            "unexpected error: {err:?}"
+        );
+        assert!(!dest.exists(), "the empty file must not be left behind");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A server that explicitly declares a zero length must also be rejected:
+    /// the byte-count check sees 0 == 0 and lets it through otherwise.
+    #[tokio::test]
+    async fn an_explicit_zero_content_length_is_rejected() {
+        let (result, dir, dest) = run_download(
+            "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_string(),
+            3,
+            "explicit-empty",
+        )
+        .await;
+
+        let err = result.expect_err("a declared zero length must fail");
+        assert!(
+            matches!(err, RequestError::EmptyDownload { .. }),
+            "unexpected error: {err:?}"
+        );
+        assert!(!dest.exists(), "the empty file must not be left behind");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_normal_body_is_written_and_kept() {
+        let body = "hello world";
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let (result, dir, dest) = run_download(response, 1, "normal").await;
+
+        result.expect("a normal download must succeed");
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), body);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
