@@ -310,7 +310,6 @@ pub(super) fn toolbar_bar(
     mut toolbar_width: State<f32>,
     bulk: &Bulk,
     open_folder: Option<PathBuf>,
-    dispatch: crate::hooks::Actions,
     update_all: Vec<oneclient_core::BrowserPackageUpdate>,
 ) -> impl IntoElement {
     let local_tab = matches!(tabs.get(active_idx), Some(Tab::Local));

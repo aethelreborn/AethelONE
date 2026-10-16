@@ -819,7 +819,6 @@ impl Component for PackageManager {
                 toolbar_width,
                 &bulk,
                 self.open_folder.clone(),
-                dispatch,
                 self.update_all.clone(),
             ))
             .child(

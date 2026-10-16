@@ -175,7 +175,7 @@ impl Component for PlayerModel {
         });
 
         rect()
-            .key(src_ptr as u64)
+            .key(cache_key)
             .width(self.width.clone())
             .height(self.height.clone())
             .cursor(CursorIcon::Grab)
