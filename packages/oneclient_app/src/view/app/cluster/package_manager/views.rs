@@ -395,11 +395,14 @@ pub(super) fn toolbar_bar(
             .primary()
             .height(Size::px(34.))
             .font_size(12.)
-            .on_press(move |_| {
-                if local_tab {
-                    import_from_file(cluster_id, content_type, dispatch.clone());
-                } else {
-                    open_browser(cluster_id, package_type);
+            .on_press({
+                let dispatch = dispatch.clone();
+                move |_| {
+                    if local_tab {
+                        import_from_file(cluster_id, content_type, dispatch.clone());
+                    } else {
+                        open_browser(cluster_id, package_type);
+                    }
                 }
             })
             .child(
