@@ -1,3 +1,13 @@
+## 2.15.2 (2026-10-16)
+
+### Fixes
+
+- Fixed the browser replaying its page animation and losing the picked cluster when switching cluster or type by [LynithDev](https://github.com/LynithDev)
+- Clear zero-byte mod and pack files at launch: an empty jar in the mods folder makes Fabric abort with "zip file is empty", so the launch-time repair sweep now removes empty content files (mods, resource packs, shaders) alongside the zero-filled files left by unclean shutdowns. Config files are left alone.
+- Fixed too long names overflowing in the drag and drop window by [rozwader](https://github.com/rozwader)
+- Fixed filters resetting when you change a tab in cluster view by [rozwader](https://github.com/rozwader)
+- Added ctrl + f shortcut for focusing the searchbar in logs and live log views by [rozwader](https://github.com/rozwader)
+
 ## 2.15.1 (2026-10-16)
 
 ### Fixes
