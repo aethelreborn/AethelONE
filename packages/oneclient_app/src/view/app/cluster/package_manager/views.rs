@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::super::folder_list::folder_button;
 use super::*;
 
@@ -75,11 +77,25 @@ pub(super) enum EnabledFilter {
 }
 
 impl EnabledFilter {
+    pub(super) const STORAGE_KEY: &'static str = "show";
+
     const ALL: [EnabledFilter; 3] = [
         EnabledFilter::All,
         EnabledFilter::Enabled,
         EnabledFilter::Disabled,
     ];
+
+    fn key(self) -> &'static str {
+        match self {
+            EnabledFilter::All => "all",
+            EnabledFilter::Enabled => "enabled",
+            EnabledFilter::Disabled => "disabled",
+        }
+    }
+
+    pub(super) fn from_key(key: &str) -> Option<Self> {
+        EnabledFilter::ALL.into_iter().find(|f| f.key() == key)
+    }
 
     fn label(self) -> &'static str {
         match self {
@@ -106,7 +122,20 @@ pub(super) enum HiddenFilter {
 }
 
 impl HiddenFilter {
+    pub(super) const STORAGE_KEY: &'static str = "hidden";
+
     const ALL: [HiddenFilter; 2] = [HiddenFilter::Hide, HiddenFilter::Show];
+
+    fn key(self) -> &'static str {
+        match self {
+            HiddenFilter::Hide => "hide",
+            HiddenFilter::Show => "show",
+        }
+    }
+
+    pub(super) fn from_key(key: &str) -> Option<Self> {
+        HiddenFilter::ALL.into_iter().find(|f| f.key() == key)
+    }
 
     fn label(self) -> &'static str {
         match self {
@@ -269,18 +298,23 @@ pub(super) fn toolbar_bar(
     search: State<String>,
     sort: State<Option<String>>,
     current_sort: SortMode,
-    enabled_filter: State<EnabledFilter>,
-    hidden_filter: State<HiddenFilter>,
+    filters: State<BTreeMap<String, String>>,
+    show: EnabledFilter,
+    hidden: HiddenFilter,
     uses_bundles: bool,
     layout: State<ViewLayout>,
     cluster_id: i64,
     package_type: &'static str,
+    content_type: ContentType,
+    dispatch: Actions,
     mut toolbar_width: State<f32>,
     bulk: &Bulk,
     open_folder: Option<PathBuf>,
     dispatch: crate::hooks::Actions,
     update_all: Vec<oneclient_core::BrowserPackageUpdate>,
 ) -> impl IntoElement {
+    let local_tab = matches!(tabs.get(active_idx), Some(Tab::Local));
+
     let chips = tabs.iter().enumerate().map(|(i, tab)| {
         let mut active = active;
         CategoryChip {
@@ -330,14 +364,7 @@ pub(super) fn toolbar_bar(
                     .into_element(),
             )
             .into_element(),
-        filter_button(
-            sort,
-            current_sort,
-            enabled_filter,
-            hidden_filter,
-            uses_bundles,
-        )
-        .into_element(),
+        filter_button(sort, current_sort, filters, show, hidden, uses_bundles).into_element(),
     ];
     if let Some(folder) = open_folder {
         controls.insert(0, folder_button(folder));
@@ -369,9 +396,26 @@ pub(super) fn toolbar_bar(
             .primary()
             .height(Size::px(34.))
             .font_size(12.)
-            .on_press(move |_| open_browser(cluster_id, package_type))
-            .child(Icon::new(IconType::Plus).size(15.))
-            .text("Add Content")
+            .on_press(move |_| {
+                if local_tab {
+                    import_from_file(cluster_id, content_type, dispatch.clone());
+                } else {
+                    open_browser(cluster_id, package_type);
+                }
+            })
+            .child(
+                Icon::new(if local_tab {
+                    IconType::FilePlus02
+                } else {
+                    IconType::Plus
+                })
+                .size(15.),
+            )
+            .text(if local_tab {
+                "Add from file"
+            } else {
+                "Add Content"
+            })
             .into_element(),
     );
     if !update_all.is_empty() {
@@ -579,13 +623,11 @@ pub(crate) fn notice_bar(text: String) -> Element {
 fn filter_button(
     mut sort: State<Option<String>>,
     current_sort: SortMode,
-    mut enabled_filter: State<EnabledFilter>,
-    mut hidden_filter: State<HiddenFilter>,
+    mut filters: State<BTreeMap<String, String>>,
+    show: EnabledFilter,
+    hidden: HiddenFilter,
     uses_bundles: bool,
 ) -> FilterMenu {
-    let show = *enabled_filter.read();
-    let hidden = *hidden_filter.read();
-
     // Hiding hidden packages is the default so it does not count as the filters being touched
     let active = current_sort != SortMode::NameAsc
         || show != EnabledFilter::All
@@ -604,7 +646,9 @@ fn filter_button(
             "Show",
             EnabledFilter::ALL.map(|filter| {
                 FilterOption::new(filter.label(), filter == show, move |()| {
-                    enabled_filter.set(filter);
+                    filters
+                        .write()
+                        .insert(EnabledFilter::STORAGE_KEY.into(), filter.key().into());
                 })
             }),
         );
@@ -616,10 +660,30 @@ fn filter_button(
         "Hidden packages",
         HiddenFilter::ALL.map(|filter| {
             FilterOption::new(filter.label(), filter == hidden, move |()| {
-                hidden_filter.set(filter);
+                filters
+                    .write()
+                    .insert(HiddenFilter::STORAGE_KEY.into(), filter.key().into());
             })
         }),
     )
+}
+
+fn import_from_file(cluster_id: i64, content_type: ContentType, dispatch: Actions) {
+    spawn(async move {
+        if let Some(handles) = rfd::AsyncFileDialog::new()
+            .set_title("Select files to import")
+            .pick_files()
+            .await
+        {
+            dispatch.import_local_files(
+                cluster_id,
+                handles
+                    .iter()
+                    .map(|handle| (handle.path().to_path_buf(), content_type))
+                    .collect(),
+            );
+        }
+    });
 }
 
 fn add_from_file_button(
@@ -629,24 +693,7 @@ fn add_from_file_button(
 ) -> impl IntoElement {
     Button::new()
         .primary()
-        .on_press(move |_| {
-            let dispatch = dispatch.clone();
-            spawn(async move {
-                if let Some(handles) = rfd::AsyncFileDialog::new()
-                    .set_title("Select files to import")
-                    .pick_files()
-                    .await
-                {
-                    dispatch.import_local_files(
-                        cluster_id,
-                        handles
-                            .iter()
-                            .map(|handle| (handle.path().to_path_buf(), content_type))
-                            .collect(),
-                    );
-                }
-            });
-        })
+        .on_press(move |_| import_from_file(cluster_id, content_type, dispatch.clone()))
         .child(Icon::new(IconType::FilePlus02).size(14.))
         .text("Add from file")
 }
@@ -918,22 +965,6 @@ impl Component for ContentBox {
             }
         });
 
-        let header = (count > 0)
-            .then(|| match kind {
-                // The toolbar already carries a permanent "Add Content" button
-                ContentKind::Browser => None,
-                ContentKind::Local => Some(
-                    action_header(add_from_file_button(
-                        cluster_id,
-                        content_type,
-                        dispatch.clone(),
-                    ))
-                    .into_element(),
-                ),
-                ContentKind::Other | ContentKind::NoMatches { .. } => None,
-            })
-            .flatten();
-
         let mut bottom_corners = CornerRadius::new_all(0.);
         bottom_corners.fill_bottom(12.);
 
@@ -948,7 +979,6 @@ impl Component for ContentBox {
             .overflow(Overflow::Clip)
             .content(Content::Flex)
             .children(self.notices.iter().map(|text| notice_bar(text.clone())))
-            .maybe_child(header)
             .maybe_child(scroll)
             .maybe_child(empty.map(|empty| {
                 rect()
@@ -959,16 +989,6 @@ impl Component for ContentBox {
             .maybe_child(menu_overlay)
             .maybe_child(delete_dialog)
     }
-}
-
-fn action_header(button: impl IntoElement) -> impl IntoElement {
-    rect()
-        .horizontal()
-        .width(Size::fill())
-        .cross_align(Alignment::Center)
-        .content(Content::Flex)
-        .child(rect().width(Size::flex(1.0)))
-        .child(button)
 }
 
 pub(crate) fn empty_shell(icon: IconType) -> Rect {

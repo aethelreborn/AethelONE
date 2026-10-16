@@ -389,7 +389,7 @@ impl Component for ParallaxArt {
         let parallax_enabled = self.parallax_enabled;
         let fade_opacity = self.fade_opacity;
 
-        let render_cb = RenderCallback::new(move |ctx: &mut CanvasContext| {
+        let render_cb = RenderCallback::new(move |ctx: &mut FillRenderContext| {
             let Some(image) = &image else {
                 return;
             };
@@ -487,10 +487,11 @@ impl Component for ParallaxArt {
                     .layer(Layer::Relative(0))
                     .opacity(fade_opacity)
                     .child(
-                        canvas(render_cb)
+                        rect()
                             .key(src_ptr as u64)
                             .width(Size::fill())
-                            .height(Size::fill()),
+                            .height(Size::fill())
+                            .background(render_cb),
                     ),
             )
     }

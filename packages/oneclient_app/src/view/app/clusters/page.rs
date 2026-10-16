@@ -30,7 +30,7 @@ use crate::view::app::clusters::{
     CreateInstanceModal, DeleteInstanceModal, DuplicateInstanceModal, EditInstanceModal,
     InstanceFacts,
 };
-use crate::view::app::{launch_button_state, launch_syncing};
+use crate::view::app::{launch_button_state, launch_syncing, use_shared_dir_taken};
 
 const PAGE_PADDING: Gaps = Gaps::new(12., 28., 28., 28.);
 const COLUMN_GAP_PX: f32 = 24.;
@@ -946,6 +946,7 @@ impl Component for Sidebar {
 
         let cluster_id = self.cluster_id;
         let syncing = launch_syncing(&launcher, self.uses_bundles);
+        let shared_dir_taken = use_shared_dir_taken(cluster_id);
         let art_height = art_height_for(*sidebar_height.read());
         let top_padding = if art_height.is_some() { 4. } else { 22. };
 
@@ -1020,7 +1021,7 @@ impl Component for Sidebar {
                             .child(play_button(
                                 cluster_id,
                                 dispatch.clone(),
-                                launch_button_state(&game, cluster_id, syncing),
+                                launch_button_state(&game, cluster_id, syncing, shared_dir_taken),
                             ))
                             .maybe_child(game.is_running(cluster_id).then(|| {
                                 Button::new()

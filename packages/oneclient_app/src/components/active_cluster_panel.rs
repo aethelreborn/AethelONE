@@ -13,7 +13,7 @@ use crate::hooks::{
 use crate::routes::Route;
 use crate::theme::colors;
 use crate::utils::sort_clusters_for_home;
-use crate::view::app::{launch_button_state, launch_syncing};
+use crate::view::app::{launch_button_state, launch_syncing, shared_dir_taken};
 
 #[derive(PartialEq)]
 pub struct ActiveClusterPanel;
@@ -115,7 +115,9 @@ impl Component for ActiveClusterPanel {
         };
         let cluster_id = cluster.id;
         let syncing = launch_syncing(&launcher, cluster.uses_bundles());
-        let (launch_label, enabled) = launch_button_state(&game, cluster_id, syncing);
+        let shared_dir_taken = shared_dir_taken(&game, &sorted, cluster_id);
+        let (launch_label, enabled) =
+            launch_button_state(&game, cluster_id, syncing, shared_dir_taken);
 
         // The panel only exists on the home route, so Enter dies with the page
         let enter_dispatch = dispatch.clone();

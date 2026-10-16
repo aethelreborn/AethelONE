@@ -192,7 +192,12 @@ pub fn bundle_packages(
                 .map(String::as_str);
             let enabled = match installed_info {
                 Some(info) => info.enabled,
-                None => oneclient_core::effective_enabled(file, ov.and_then(OverrideType::parse)),
+                None => {
+                    let ov = ov.and_then(OverrideType::parse);
+                    ov == Some(OverrideType::Enabled)
+                        || (bundle.opted_in_types.contains(&content_type)
+                            && oneclient_core::effective_enabled(file, ov))
+                }
             };
 
             let advanced = content_type == ContentType::Mod
@@ -244,7 +249,7 @@ pub fn bundle_packages(
             pid,
             None,
             provider,
-            0,
+            info.size_bytes.unwrap_or(0),
             Vec::new(),
             info.enabled,
             true,
@@ -597,13 +602,12 @@ impl Component for PackageManager {
         let active = use_state(|| 0usize);
 
         let search = use_state(String::new);
-        let enabled_filter = use_state(|| EnabledFilter::All);
-        let hidden_filter = use_state(|| HiddenFilter::Hide);
         let allow_bundled_removal = use_settings_snapshot().settings.allow_bundled_mod_removal;
         let advanced_open = use_state(|| false);
         let toolbar_width = use_state(|| 0f32);
         let selection = use_selection::<String>();
         let mutation = use_cluster_mutation();
+        let dispatch = use_dispatch();
         let mut guard = use_essential_guard();
         let warnings_query = use_disable_warnings();
         let mut confirm_delete = use_state(|| false);
@@ -617,8 +621,17 @@ impl Component for PackageManager {
             .and_then(SortMode::from_key)
             .unwrap_or(SortMode::NameAsc);
 
-        let show = *enabled_filter.read();
-        let hidden = *hidden_filter.read();
+        let filters = view.filters;
+        let show = filters
+            .read()
+            .get(EnabledFilter::STORAGE_KEY)
+            .and_then(|key| EnabledFilter::from_key(key))
+            .unwrap_or(EnabledFilter::All);
+        let hidden = filters
+            .read()
+            .get(HiddenFilter::STORAGE_KEY)
+            .and_then(|key| HiddenFilter::from_key(key))
+            .unwrap_or(HiddenFilter::Hide);
         let card_layout = CardLayout::from(*layout.read());
 
         let disabled_essentials: Vec<&'static str> = items
@@ -794,12 +807,15 @@ impl Component for PackageManager {
                 search,
                 sort,
                 sort_mode,
-                enabled_filter,
-                hidden_filter,
+                filters,
+                show,
+                hidden,
                 uses_bundles,
                 layout,
                 cluster_id,
                 package_type,
+                content_type,
+                dispatch,
                 toolbar_width,
                 &bulk,
                 self.open_folder.clone(),
@@ -881,6 +897,16 @@ mod tests {
         assert_eq!(all, ["shared", "only-taken"]);
         let shared = rows.iter().find(|p| p.package_id == "shared").unwrap();
         assert_eq!(shared.categories, ["Taken"]);
+        let only_declined = rows
+            .iter()
+            .find(|p| p.package_id == "only-declined")
+            .unwrap();
+        assert!(
+            !only_declined.enabled,
+            "a turned down bundle's mods read off"
+        );
+        let only_taken = rows.iter().find(|p| p.package_id == "only-taken").unwrap();
+        assert!(only_taken.enabled);
         let declined = Tab::Category("Declined".into());
         assert!(
             rows.iter()
