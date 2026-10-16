@@ -34,3 +34,8 @@ thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+# `start_paused` on #[tokio::test] needs tokio's test-util, which the
+# workspace's "full" feature set does not include.
+tokio = { workspace = true, features = ["test-util"] }

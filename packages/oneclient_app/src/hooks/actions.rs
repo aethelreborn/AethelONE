@@ -345,6 +345,25 @@ impl Actions {
         }
     }
 
+    /// Pauses or resumes every download. The gate lives on the shared net
+    /// client, so content, game and Java transfers all stop together.
+    pub fn set_downloads_paused(&self, paused: bool) {
+        let Ok(state) = launcher::state() else { return };
+        let gate = state.services.requester.pause_gate();
+        if paused {
+            gate.pause();
+        } else {
+            gate.resume();
+        }
+    }
+
+    #[must_use]
+    pub fn downloads_paused(&self) -> bool {
+        launcher::state()
+            .map(|state| state.services.requester.pause_gate().is_paused())
+            .unwrap_or(false)
+    }
+
     pub fn skip_microsoft_java(&self) {
         if let Some(updated) = self.mutate_settings(|settings| settings.skip_microsoft_java = true)
         {

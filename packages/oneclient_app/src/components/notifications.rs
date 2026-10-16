@@ -145,11 +145,18 @@ impl Component for NotifEntryRow {
         let dispatch = use_dispatch();
         let enter_dispatch = dispatch.clone();
         let body_dispatch = dispatch.clone();
+        let tasks_dispatch = dispatch.clone();
         let click_dismissable = entry.click_dismissable();
         let has_actions = !entry.actions.is_empty();
 
         let mut hovered = use_state(|| false);
         let expanded = use_state(|| false);
+        // Bumped after a pause toggle so the label re-reads the gate even when
+        // no progress events are flowing to re-render this row for us
+        let refresh_paused = use_state(|| 0u32);
+        // `read` (not `peek`) is what subscribes this row to the bump above
+        let _ = *refresh_paused.read();
+        let downloads_paused = tasks_dispatch.downloads_paused();
 
         let content = rect()
             .horizontal()
@@ -188,8 +195,14 @@ impl Component for NotifEntryRow {
             .width(Size::fill())
             .spacing(8.)
             .child(content)
-            .maybe(!entry.tasks.is_empty(), |el| {
-                el.child(tasks_section(&entry, expanded))
+            .maybe(!entry.tasks.is_empty() || downloads_paused, |el| {
+                el.child(tasks_section(
+                    &entry,
+                    expanded,
+                    tasks_dispatch,
+                    downloads_paused,
+                    refresh_paused,
+                ))
             })
             .maybe(self.show_divider, |el| el.child(divider()))
     }
@@ -197,7 +210,13 @@ impl Component for NotifEntryRow {
 
 const TASK_LIMIT: usize = 12;
 
-fn tasks_section(entry: &InboxEntry, mut expanded: State<bool>) -> impl IntoElement {
+fn tasks_section(
+    entry: &InboxEntry,
+    mut expanded: State<bool>,
+    dispatch: crate::Actions,
+    paused: bool,
+    mut refresh_paused: State<u32>,
+) -> impl IntoElement {
     let is_expanded = *expanded.read();
     let count = entry.tasks.len();
 
@@ -209,25 +228,45 @@ fn tasks_section(entry: &InboxEntry, mut expanded: State<bool>) -> impl IntoElem
         .child(
             rect()
                 .horizontal()
+                .width(Size::fill())
                 .cross_align(Alignment::Center)
                 .spacing(6.)
-                .cursor(CursorIcon::Pointer)
-                .on_press(move |_| {
-                    let now = !*expanded.peek();
-                    expanded.set(now);
-                })
-                .child(ChevronToggle {
-                    expanded: is_expanded,
-                })
                 .child(
-                    label()
-                        .text(if is_expanded {
-                            "Hide tasks".to_string()
-                        } else {
-                            format!("Show {count} tasks")
+                    rect()
+                        .horizontal()
+                        .cross_align(Alignment::Center)
+                        .spacing(6.)
+                        .cursor(CursorIcon::Pointer)
+                        .on_press(move |_| {
+                            let now = !*expanded.peek();
+                            expanded.set(now);
                         })
-                        .font_size(11.)
-                        .color(colors::fg_secondary()),
+                        .child(ChevronToggle {
+                            expanded: is_expanded,
+                        })
+                        .child(
+                            label()
+                                .text(if is_expanded {
+                                    "Hide tasks".to_string()
+                                } else {
+                                    format!("Show {count} tasks")
+                                })
+                                .font_size(11.)
+                                .color(colors::fg_secondary()),
+                        ),
+                )
+                .child(rect().width(Size::flex(1.0)))
+                .child(
+                    Button::new()
+                        .small()
+                        .ghost()
+                        .text(if paused { "Resume" } else { "Pause" })
+                        .on_press(move |_| {
+                            let next = !paused;
+                            dispatch.set_downloads_paused(next);
+                            let tick = *refresh_paused.peek() + 1;
+                            refresh_paused.set(tick);
+                        }),
                 ),
         );
 

@@ -64,6 +64,11 @@ jobs:
           cargo test -p oneclient_app --
           --skip a_disabled_override_on_an_unlinked_pin_offers_enable
 
+      # oneclient_app only compiles oneclient_net's non-test code, so its
+      # pause gate, throttle and cache tests need their own invocation.
+      - name: Run oneclient_net tests
+        run: cargo test -p oneclient_net --
+
   build:
     permissions:
       contents: read

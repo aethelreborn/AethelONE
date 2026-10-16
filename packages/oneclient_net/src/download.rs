@@ -118,6 +118,10 @@ async fn download_attempt(
         child.set_phase(TaskPhase::Downloading);
     }
 
+    // While paused, hold new transfers before the request opens - nothing sits
+    // on a socket just to be stalled
+    client.pause_gate().wait_resumed().await;
+
     let request = reqwest::Request::new(Method::GET, url.parse()?);
     let response = client.send(request).await?;
 
@@ -144,6 +148,7 @@ async fn download_attempt(
         notify: notify.cloned(),
     };
     let stream = response.stream(options, events).await?;
+    let stream = crate::pause::gate(stream, client.pause_gate());
     let stream = crate::rate_limit::throttle(stream, std::sync::Arc::clone(client.limiter()));
 
     let mut hasher = expected.map(|expected| ChecksumStream::new(expected.algorithm));

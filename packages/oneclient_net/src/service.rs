@@ -8,6 +8,7 @@ use tokio::sync::Semaphore;
 
 use crate::config::NetConfig;
 use crate::error::{RequestError, body_snippet};
+use crate::pause::PauseGate;
 use crate::rate_limit::DownloadLimiter;
 use crate::request::HttpRequest;
 use crate::response::{ResponseExt, ResponseOptions};
@@ -88,6 +89,8 @@ pub struct RequestClient {
     /// Shared with every clone so a saved speed limit throttles in-flight
     /// downloads too
     limiter: Arc<DownloadLimiter>,
+    /// Shared with every clone so a pause toggle stops in-flight downloads too
+    pause: PauseGate,
 }
 
 impl RequestClient {
@@ -102,6 +105,11 @@ impl RequestClient {
 
     pub(crate) fn limiter(&self) -> &Arc<DownloadLimiter> {
         &self.limiter
+    }
+
+    #[must_use]
+    pub fn pause_gate(&self) -> PauseGate {
+        self.pause.clone()
     }
 
     pub fn set_config(&self, config: NetConfig) {
@@ -133,6 +141,7 @@ impl RequestClient {
             limiter: Arc::new(DownloadLimiter::new(
                 config.download_speed_limit_bytes_per_sec(),
             )),
+            pause: PauseGate::new(),
         })
     }
 }
@@ -232,6 +241,10 @@ impl RequestClient {
         options: ResponseOptions,
         events: &EventBus,
     ) -> Result<(), RequestError> {
+        // While paused, hold new transfers before the request opens - nothing
+        // sits on a socket just to be stalled
+        self.pause.wait_resumed().await;
+
         let res = self.send(request).await?;
 
         // Without this an error body is written to disk under the requested file's name
@@ -248,6 +261,7 @@ impl RequestClient {
 
         let size_hint = res.content_length();
         let http_stream = res.stream(options, events).await?;
+        let http_stream = crate::pause::gate(http_stream, self.pause.clone());
         let http_stream = crate::rate_limit::throttle(http_stream, Arc::clone(&self.limiter));
         let http_stream = std::pin::pin!(http_stream);
 
