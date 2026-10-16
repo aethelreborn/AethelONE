@@ -1319,7 +1319,7 @@ mod tests {
                 address: "mc.example.com".to_string(),
             },
         );
-        assert_eq!(args[2..], ["--quickPlayMultiplayer", "mc.example.com"]);
+        assert_eq!(args[4..], ["--quickPlayMultiplayer", "mc.example.com"]);
     }
 
     #[test]
