@@ -1049,7 +1049,7 @@ mod tests {
     #[tokio::test]
     async fn duplicate_copies_the_cluster_folder_and_registers_a_new_instance() {
         let root = test_root();
-        let pool = oneclient_db::connect(root.join("oneclient.db"))
+        let pool = oneclient_db::connect(root.join("duplicate.db"))
             .await
             .expect("open database");
         let manager = ClusterManager::new(pool);
@@ -1121,13 +1121,14 @@ mod tests {
         assert!(names.contains(&"Source Instance".to_string()));
         assert!(names.contains(&"Copy Instance".to_string()));
 
-        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(&source_dir);
+        let _ = std::fs::remove_dir_all(&copy_dir);
     }
 
     #[tokio::test]
     async fn import_registers_an_instance_from_an_exported_archive() {
         let root = test_root();
-        let pool = oneclient_db::connect(root.join("oneclient.db"))
+        let pool = oneclient_db::connect(root.join("import.db"))
             .await
             .expect("open database");
         let manager = ClusterManager::new(pool);
@@ -1184,7 +1185,7 @@ mod tests {
     #[tokio::test]
     async fn import_refuses_an_archive_that_is_not_an_instance() {
         let root = test_root();
-        let pool = oneclient_db::connect(root.join("oneclient.db"))
+        let pool = oneclient_db::connect(root.join("import-refusal.db"))
             .await
             .expect("open database");
         let manager = ClusterManager::new(pool);
