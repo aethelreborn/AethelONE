@@ -628,6 +628,13 @@ async fn start(
     Ok(LaunchedGame { cluster_id, pid })
 }
 
+/// What the crash report suggests and who to offer to switch off
+struct CrashSuspicion {
+    note: String,
+    /// The first blamed mod that is still a linked artifact label and hash
+    disable: Option<(String, String)>,
+}
+
 /// Reads the newest crash report from this session and names the mods it
 /// blames best effort a missing report or unreadable mods list only means the
 /// notification says less
@@ -635,13 +642,17 @@ async fn crash_suspicion(
     state: &Arc<LauncherState>,
     cluster: &Cluster,
     started_at: DateTime<Utc>,
-) -> Option<String> {
+) -> Option<CrashSuspicion> {
     let dir = cluster.dir().ok()?;
     let report = newest_crash_report(&dir.join("crash-reports"), started_at)?;
     let text = read_report_head(&report)?;
     let candidates = crash_candidates(state, cluster.id).await;
 
-    let triage = crash_triage::triage(&text, &candidates);
+    let blamable: Vec<CrashCandidate> = candidates
+        .iter()
+        .map(|(candidate, _)| candidate.clone())
+        .collect();
+    let triage = crash_triage::triage(&text, &blamable);
     if triage.suspects.is_empty() {
         return None;
     }
@@ -659,7 +670,87 @@ async fn crash_suspicion(
         let _ = write!(note, " ({desc})");
     }
 
-    Some(note)
+    Some(CrashSuspicion {
+        note,
+        disable: disable_target(&triage.suspects, &candidates),
+    })
+}
+
+/// The offer only makes sense for a suspect the cluster really has linked
+/// an explicit section may name a dependency that was never installed
+fn disable_target(
+    suspects: &[String],
+    candidates: &[(CrashCandidate, String)],
+) -> Option<(String, String)> {
+    suspects.iter().find_map(|suspect| {
+        candidates
+            .iter()
+            .find(|(candidate, _)| candidate.label == *suspect)
+            .map(|(_, hash)| (suspect.clone(), hash.clone()))
+    })
+}
+
+/// Asks before acting disabling someone's mod on a guess is not a thing to do
+/// silently and mod entry points do not always stay crash-worthy
+async fn offer_suspect_disable(
+    state: &Arc<LauncherState>,
+    cluster_id: i64,
+    label: &str,
+    hash: &str,
+) {
+    enum Answer {
+        Disable,
+    }
+
+    let answer = state
+        .services
+        .events
+        .ask(
+            oneclient_events::Prompt::new(
+                format!("{label} probably crashed the game"),
+                "The crash report blames it. Disabling it may get the game running again, \
+                 and you can switch it back on from Mods at any time.",
+            )
+            .option(
+                oneclient_events::Choice::primary("disable", "Disable it"),
+                Answer::Disable,
+            )
+            .dismiss("Keep it"),
+        )
+        .await;
+
+    match answer {
+        Ok(Some(_)) => {}
+        // Dismissed or nobody there to ask neither is consent to touch the mods
+        Ok(None) => {
+            tracing::info!(cluster_id, "user declined the post-crash disable");
+            return;
+        }
+        Err(err) => {
+            tracing::warn!(cluster_id, "could not offer a post-crash disable: {err}");
+            return;
+        }
+    }
+
+    let content = state.services.content();
+    match PackageStore::set_artifact_enabled_to(cluster_id, hash, false, &content).await {
+        Ok(_) => state
+            .services
+            .events
+            .notify(format!("Disabled {label}"))
+            .body("It will be skipped on the next launch.")
+            .send(),
+        Err(err) => {
+            tracing::warn!(cluster_id, error = %err, "post-crash disable failed");
+            state
+                .services
+                .events
+                .notify(format!("Could not disable {label}"))
+                .body(err.to_string())
+                .error()
+                .send();
+        }
+    }
 }
 
 /// Reports can run to megabytes but the description and the first frames are
@@ -707,8 +798,11 @@ fn newest_crash_report(dir: &Path, started_at: DateTime<Utc>) -> Option<PathBuf>
 }
 
 /// The enabled mods a report could blame with the words its class names tend
-/// to carry
-async fn crash_candidates(state: &Arc<LauncherState>, cluster_id: i64) -> Vec<CrashCandidate> {
+/// to carry and the hash that switching one off needs
+async fn crash_candidates(
+    state: &Arc<LauncherState>,
+    cluster_id: i64,
+) -> Vec<(CrashCandidate, String)> {
     let Ok(linked) =
         PackageStore::list_linked_artifacts(cluster_id, &state.services.content()).await
     else {
@@ -731,7 +825,7 @@ async fn crash_candidates(state: &Arc<LauncherState>, cluster_id: i64) -> Vec<Cr
                 .display_name
                 .unwrap_or_else(|| artifact.file_name.clone());
 
-            Some(CrashCandidate { label, tokens })
+            Some((CrashCandidate { label, tokens }, artifact.hash))
         })
         .collect()
 }
@@ -869,6 +963,9 @@ pub(crate) async fn finalize_session(
     } else {
         None
     };
+    let disable_offer = suspicion
+        .as_ref()
+        .and_then(|suspicion| suspicion.disable.clone());
 
     match end.outcome {
         Exit::Observed { success: true, .. } => {}
@@ -877,7 +974,7 @@ pub(crate) async fn finalize_session(
             .events
             .notify("Game crashed")
             .body(match suspicion {
-                Some(note) => format!("{name} exited with {display}. {note}"),
+                Some(suspicion) => format!("{name} exited with {display}. {}", suspicion.note),
                 None => format!("{name} exited with {display}"),
             })
             .error()
@@ -897,6 +994,11 @@ pub(crate) async fn finalize_session(
     // worth interrupting a finished session over
     if crashed && let Some(diagnosis) = end.diagnosis {
         offer_repair(state, cluster_id, &diagnosis).await;
+    }
+
+    // The notification says why the offer asks what to do about it
+    if let Some((label, hash)) = disable_offer {
+        offer_suspect_disable(state, cluster_id, &label, &hash).await;
     }
 }
 
@@ -1149,4 +1251,38 @@ fn stderr_detail(bytes: &[u8]) -> Option<String> {
     let mut clipped: String = line.chars().take(MAX).collect();
     clipped.push('…');
     Some(clipped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(label: &str) -> (CrashCandidate, String) {
+        (
+            CrashCandidate {
+                label: label.to_string(),
+                tokens: vec![label.to_ascii_lowercase()],
+            },
+            format!("hash-{label}"),
+        )
+    }
+
+    #[test]
+    fn the_offer_targets_the_first_suspect_the_cluster_has() {
+        let candidates = vec![candidate("Sodium"), candidate("Iris")];
+        let suspects = vec!["Ghost Mod".to_string(), "Iris".to_string()];
+
+        assert_eq!(
+            disable_target(&suspects, &candidates),
+            Some(("Iris".to_string(), "hash-Iris".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_suspect_that_is_not_installed_gets_no_offer() {
+        assert_eq!(
+            disable_target(&["Ghost Mod".to_string()], &[candidate("Sodium")]),
+            None
+        );
+    }
 }
