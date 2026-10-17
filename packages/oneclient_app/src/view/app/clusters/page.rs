@@ -259,14 +259,18 @@ impl Component for Clusters {
                 .filter_map(|l| sort_clusters_for_home(groups[l].clone()).into_iter().next())
                 .collect(),
         );
-        let shown_lines: Vec<ReleaseLine> =
-            shown(&line_heads.iter().collect::<Vec<_>>(), sort_by, |c| {
+        let shown_lines: Vec<ReleaseLine> = shown(
+            &line_heads.iter().collect::<Vec<_>>(),
+            sort_by,
+            |c| {
                 active_filter.shows(Filter::OneClient)
                     && ReleaseLine::for_cluster(c).is_some_and(|l| groups[&l].iter().any(matches))
-            })
-            .into_iter()
-            .filter_map(ReleaseLine::for_cluster)
-            .collect();
+            },
+            &favorites,
+        )
+        .into_iter()
+        .filter_map(ReleaseLine::for_cluster)
+        .collect();
         let shown_custom = shown(
             &custom,
             sort_by,
