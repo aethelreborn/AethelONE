@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use oneclient_content::packages::health::HealthIssue;
 use oneclient_content::packages::release_migration::has_packages_to_migrate;
 use oneclient_content::packages::{ContentType, PackageStore};
 use oneclient_core::game::DuplicateMods;
@@ -113,6 +114,37 @@ impl QueryCapability for ShadowedModsQuery {
 
 pub fn use_shadowed_mods(cluster_id: ClusterId) -> Arc<DuplicateMods> {
     let query = use_query(Query::new(cluster_id, ShadowedModsQuery));
+    super::state::settled_or_loading(&query).unwrap_or_default()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ModHealthQuery;
+
+impl QueryCapability for ModHealthQuery {
+    type Ok = Arc<Vec<HealthIssue>>;
+    type Err = LauncherError;
+    type Keys = ClusterId;
+
+    async fn run(&self, cluster_id: &Self::Keys) -> Result<Self::Ok, Self::Err> {
+        let state = crate::launcher::state()?;
+        let cluster_id = *cluster_id;
+        off_ui(async move {
+            let cluster = state.clusters.get(cluster_id).await?;
+            let Ok(mods_dir) = oneclient_common::paths::cluster_mods_dir(&cluster.folder_name)
+            else {
+                return Ok(Arc::new(Vec::new()));
+            };
+            let issues =
+                oneclient_content::packages::health::scan_mods_dir(&mods_dir, cluster.mc_loader)
+                    .await;
+            Ok(Arc::new(issues))
+        })
+        .await
+    }
+}
+
+pub fn use_mod_health(cluster_id: ClusterId) -> Arc<Vec<HealthIssue>> {
+    let query = use_query(Query::new(cluster_id, ModHealthQuery));
     super::state::settled_or_loading(&query).unwrap_or_default()
 }
 

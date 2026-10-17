@@ -3,6 +3,7 @@ pub mod bad_mods;
 pub mod dependencies;
 pub mod error;
 pub mod fabric_version;
+pub mod health;
 pub mod local_manifest;
 pub mod metadata_cache;
 pub mod mirror;

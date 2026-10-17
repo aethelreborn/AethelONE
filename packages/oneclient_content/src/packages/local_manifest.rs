@@ -13,7 +13,7 @@ const NEOFORGE: &str = "META-INF/neoforge.mods.toml";
 const FORGE: &str = "META-INF/mods.toml";
 const LEGACY_FORGE: &str = "mcmod.info";
 
-const MANIFESTS: [&str; 5] = [FABRIC, QUILT, NEOFORGE, FORGE, LEGACY_FORGE];
+pub(crate) const MANIFESTS: [&str; 5] = [FABRIC, QUILT, NEOFORGE, FORGE, LEGACY_FORGE];
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct JarManifest {
@@ -96,18 +96,48 @@ pub struct JarModId {
 
 #[tracing::instrument(level = "debug", fields(jar = %jar.display()))]
 pub async fn read_jar_mod_id(jar: &Path) -> Option<JarModId> {
-    let entries = polyio::read_zip_file_entries(jar, |name| MANIFESTS.contains(&name))
+    let entries = read_manifest_entries(jar).await?;
+    mod_id_from_entries(&entries)
+}
+
+pub(crate) async fn read_manifest_entries(jar: &Path) -> Option<Vec<(String, Vec<u8>)>> {
+    polyio::read_zip_file_entries(jar, |name| MANIFESTS.contains(&name))
         .await
         .inspect_err(|err| tracing::debug!("could not read {}: {err}", jar.display()))
-        .ok()?;
+        .ok()
+}
 
+#[must_use]
+pub(crate) fn mod_id_from_entries(entries: &[(String, Vec<u8>)]) -> Option<JarModId> {
     MANIFESTS.into_iter().find_map(|wanted| {
         let (_, bytes) = entries.iter().find(|(name, _)| name == wanted)?;
         parse_mod(wanted, std::str::from_utf8(bytes).ok()?)
     })
 }
 
-fn parse_mod(manifest: &str, text: &str) -> Option<JarModId> {
+#[must_use]
+pub(crate) fn loader_from_entries(entries: &[(String, Vec<u8>)]) -> Option<GameLoader> {
+    let has = |wanted: &str| entries.iter().any(|(name, _)| name == wanted);
+
+    let fabric_family = has(FABRIC) || has(QUILT);
+    let forge_family = has(FORGE) || has(LEGACY_FORGE) || has(NEOFORGE);
+    if fabric_family && forge_family {
+        return None;
+    }
+
+    [
+        (FABRIC, GameLoader::Fabric),
+        (QUILT, GameLoader::Quilt),
+        (FORGE, GameLoader::Forge),
+        (LEGACY_FORGE, GameLoader::Forge),
+        (NEOFORGE, GameLoader::NeoForge),
+    ]
+    .into_iter()
+    .find(|(wanted, _)| has(wanted))
+    .map(|(_, loader)| loader)
+}
+
+pub(crate) fn parse_mod(manifest: &str, text: &str) -> Option<JarModId> {
     let (id, version) = match manifest {
         NEOFORGE | FORGE => {
             let id = toml::from_str::<toml::Value>(text)
@@ -149,28 +179,8 @@ fn is_placeholder_id(id: &str) -> bool {
 
 #[tracing::instrument(level = "debug", fields(jar = %jar.display()))]
 pub async fn read_jar_loader(jar: &Path) -> Option<GameLoader> {
-    let entries = polyio::read_zip_file_entries(jar, |name| MANIFESTS.contains(&name))
-        .await
-        .inspect_err(|err| tracing::debug!("could not read {}: {err}", jar.display()))
-        .ok()?;
-    let has = |wanted: &str| entries.iter().any(|(name, _)| name == wanted);
-
-    let fabric_family = has(FABRIC) || has(QUILT);
-    let forge_family = has(FORGE) || has(LEGACY_FORGE) || has(NEOFORGE);
-    if fabric_family && forge_family {
-        return None;
-    }
-
-    [
-        (FABRIC, GameLoader::Fabric),
-        (QUILT, GameLoader::Quilt),
-        (FORGE, GameLoader::Forge),
-        (LEGACY_FORGE, GameLoader::Forge),
-        (NEOFORGE, GameLoader::NeoForge),
-    ]
-    .into_iter()
-    .find(|(wanted, _)| has(wanted))
-    .map(|(_, loader)| loader)
+    let entries = read_manifest_entries(jar).await?;
+    loader_from_entries(&entries)
 }
 
 #[tracing::instrument(level = "debug", fields(jar = %jar.display()))]
