@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use freya::prelude::spawn_forever;
 use freya::query::{QueriesStorage, Query, QueryCapability, UseQuery, use_query};
 use notify::{Event, EventKind};
-use oneclient_core::{ClusterError, DataPackInfo, LEVEL_DAT, LauncherError, WORLD_ICON, WorldInfo};
+use oneclient_core::{
+    ClusterError, DataPackInfo, LEVEL_DAT, LauncherError, WORLD_ICON, WorldInfo, WorldSnapshot,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ClusterWorldsKeys {
@@ -79,6 +81,43 @@ impl QueryCapability for WorldDataPacksQuery {
         .await
         .map_err(std::io::Error::other)??)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct WorldSnapshotsKeys {
+    pub cluster_id: i64,
+    pub world: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct WorldSnapshotsQuery(WorldSnapshotsKeys);
+
+impl QueryCapability for WorldSnapshotsQuery {
+    type Ok = Vec<WorldSnapshot>;
+    type Err = LauncherError;
+    type Keys = WorldSnapshotsKeys;
+
+    fn matches(&self, keys: &Self::Keys) -> bool {
+        self.0 == *keys
+    }
+
+    async fn run(&self, keys: &Self::Keys) -> Result<Self::Ok, Self::Err> {
+        if keys.world.is_empty() {
+            return Ok(Vec::new());
+        }
+        let state = crate::launcher::state()?;
+        let cluster = state.clusters.get(keys.cluster_id).await?;
+        Ok(oneclient_core::list_world_snapshots(&cluster, &keys.world).await?)
+    }
+}
+
+pub fn use_world_snapshots(cluster_id: i64, world: String) -> UseQuery<WorldSnapshotsQuery> {
+    let keys = WorldSnapshotsKeys { cluster_id, world };
+    use_query(Query::new(keys.clone(), WorldSnapshotsQuery(keys)))
+}
+
+pub fn try_world_snapshots(query: &UseQuery<WorldSnapshotsQuery>) -> Option<Vec<WorldSnapshot>> {
+    super::state::settled_or_loading(query)
 }
 
 pub fn use_cluster_worlds(cluster_id: i64) -> UseQuery<ClusterWorldsQuery> {
@@ -232,6 +271,59 @@ pub async fn import_world_zip(
     QueriesStorage::<ClusterWorldsQuery>::invalidate_all().await;
     QueriesStorage::<WorldSizeQuery>::invalidate_matching(WorldSizeKeys { cluster_id, world })
         .await;
+    Ok(result?)
+}
+
+async fn invalidate_world_snapshots(cluster_id: i64, world: String) {
+    QueriesStorage::<WorldSnapshotsQuery>::invalidate_matching(WorldSnapshotsKeys {
+        cluster_id,
+        world,
+    })
+    .await;
+}
+
+/// Takes a launch-guard snapshot right now; `None` when the world has not
+/// changed since the newest snapshot
+pub async fn snapshot_world(
+    cluster_id: i64,
+    world: String,
+) -> Result<Option<WorldSnapshot>, LauncherError> {
+    let state = crate::launcher::state()?;
+    let keep = state.settings.read().world_backup_retention;
+    let cluster = state.clusters.get(cluster_id).await?;
+    let result = oneclient_core::snapshot_world(&cluster, &world, keep).await;
+    invalidate_world_snapshots(cluster_id, world).await;
+    Ok(result?)
+}
+
+pub async fn delete_world_snapshot(
+    cluster_id: i64,
+    world: String,
+    file: String,
+) -> Result<(), LauncherError> {
+    let state = crate::launcher::state()?;
+    let cluster = state.clusters.get(cluster_id).await?;
+    let result = oneclient_core::delete_world_snapshot(&cluster, &world, &file).await;
+    invalidate_world_snapshots(cluster_id, world).await;
+    Ok(result?)
+}
+
+pub async fn restore_world_snapshot(
+    cluster_id: i64,
+    world: String,
+    file: String,
+    name: String,
+) -> Result<(), LauncherError> {
+    let state = crate::launcher::state()?;
+    let cluster = state.clusters.get(cluster_id).await?;
+    let path = oneclient_core::world_snapshot_path(&cluster, &world, &file)?;
+    let result = oneclient_core::import_world_zip(&cluster, &name, &path).await;
+    QueriesStorage::<ClusterWorldsQuery>::invalidate_all().await;
+    QueriesStorage::<WorldSizeQuery>::invalidate_matching(WorldSizeKeys {
+        cluster_id,
+        world: name,
+    })
+    .await;
     Ok(result?)
 }
 

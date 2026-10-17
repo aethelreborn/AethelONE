@@ -5,17 +5,18 @@ use std::pin::Pin;
 use freya::prelude::*;
 use freya::router::RouterContext;
 use oneclient_common::supports_quick_play;
-use oneclient_core::{LauncherError, WorldInfo};
+use oneclient_core::{LauncherError, WorldInfo, WorldSnapshot};
 
 use crate::components::{
-    Button, CARD_BG, CARD_NAME, CardLayout, ContextMenu, Icon, IconType, Segment, SegmentedControl,
-    TextInput, kebab_button, meta_size, meta_text, on_secondary,
+    Button, CARD_BG, CARD_NAME, CardLayout, ContextMenu, Icon, IconType, OverlayPopup, Segment,
+    SegmentedControl, TextInput, kebab_button, meta_size, meta_text, on_secondary,
 };
 use crate::hooks::{
-    Actions, backup_world, delete_world, duplicate_world, import_world_zip, query_is_loading,
-    rename_world, spawn_world_task, try_cluster_worlds, try_world_size, use_cluster,
-    use_cluster_worlds, use_datapack_world, use_dispatch, use_saves_folder_watch, use_selection,
-    use_view_state, use_world_size,
+    Actions, backup_world, delete_world, delete_world_snapshot, duplicate_world, import_world_zip,
+    query_is_loading, rename_world, restore_world_snapshot, snapshot_world, spawn_world_task,
+    try_cluster_worlds, try_world_size, try_world_snapshots, use_cluster, use_cluster_worlds,
+    use_datapack_world, use_dispatch, use_saves_folder_watch, use_selection, use_view_state,
+    use_world_size, use_world_snapshots,
 };
 use crate::layout::cluster_content;
 use crate::routes::Route;
@@ -58,6 +59,7 @@ pub struct ClusterWorlds {
 enum WorldOp {
     Rename { world: String },
     Duplicate { world: String },
+    Restore { world: String, file: String },
 }
 
 fn world_safe(name: &str) -> bool {
@@ -132,6 +134,7 @@ impl Component for ClusterWorlds {
         let mut pending_delete = use_state(|| None::<Vec<String>>);
         let mut prompt = use_state(|| None::<WorldOp>);
         let mut name_text = use_state(String::new);
+        let mut snapshots_for = use_state(|| None::<String>);
         let selection = use_selection::<String>();
 
         let Some(cluster) = cluster else {
@@ -543,6 +546,11 @@ impl Component for ClusterWorlds {
                         let dispatch = dispatch.clone();
                         move |()| spawn_import_world(dispatch.clone(), cluster_id, in_use)
                     })
+                    .action(IconType::ClockRewind, "Snapshots\u{2026}", {
+                        let snapshots_world = info.folder_name.clone();
+                        let mut snapshots_state = snapshots_for;
+                        move |()| snapshots_state.set(Some(snapshots_world.clone()))
+                    })
                     .separator()
                     .danger_action(IconType::Trash01, "Delete", {
                         let dispatch = dispatch.clone();
@@ -557,6 +565,30 @@ impl Component for ClusterWorlds {
                     .on_close(move |_| menu.set(None))
                     .into_element()
             }
+        });
+
+        let snapshots_overlay = snapshots_for.read().clone().map(|world| {
+            let close = {
+                let mut close_state = snapshots_for;
+                EventHandler::new(move |()| close_state.set(None))
+            };
+            let restore = {
+                let mut close_state = snapshots_for;
+                let mut prompt_state = prompt;
+                let mut name_state = name_text;
+                EventHandler::new(move |(world, file): (String, String)| {
+                    close_state.set(None);
+                    name_state.set(format!("{world} (restored)"));
+                    prompt_state.set(Some(WorldOp::Restore { world, file }));
+                })
+            };
+            WorldSnapshotsModal {
+                cluster_id,
+                world,
+                on_restore: restore,
+                on_close: close,
+            }
+            .into_element()
         });
 
         let confirm_overlay = pending_delete.read().clone().map(|worlds| {
@@ -606,8 +638,10 @@ impl Component for ClusterWorlds {
 
         let prompt_overlay = prompt.read().clone().map(|op| {
             let is_rename = matches!(op, WorldOp::Rename { .. });
+            let is_restore = matches!(op, WorldOp::Restore { .. });
             let original = match &op {
                 WorldOp::Rename { world } | WorldOp::Duplicate { world } => world.clone(),
+                WorldOp::Restore { world, .. } => world.clone(),
             };
             let current = name_text.read().clone();
             let trimmed = current.trim();
@@ -616,11 +650,15 @@ impl Component for ClusterWorlds {
 
             let title = if is_rename {
                 "Rename world"
+            } else if is_restore {
+                "Restore snapshot"
             } else {
                 "Duplicate world"
             };
             let body = if is_rename {
                 "The world folder is renamed on disk. World links inside the instance that point at this folder will need updating."
+            } else if is_restore {
+                "The snapshot is unpacked as a new world folder next to the current world. Nothing you have now is overwritten."
             } else {
                 "A full copy of the world folder is created under the new name."
             };
@@ -640,6 +678,7 @@ impl Component for ClusterWorlds {
                         WorldOp::Rename { world } | WorldOp::Duplicate { world } => {
                             world.clone()
                         }
+                        WorldOp::Restore { world, .. } => world.clone(),
                     };
                     let name = name_text.read().clone().trim().to_string();
                     let task: Pin<Box<dyn Future<Output = Result<(), LauncherError>> + 'static>> =
@@ -654,11 +693,16 @@ impl Component for ClusterWorlds {
                                 target,
                                 name,
                             )),
+                            WorldOp::Restore { world, file } => Box::pin(
+                                restore_world_snapshot(cluster_id, world.clone(), file.clone(), name),
+                            ),
                         };
                     spawn_world_task(
                         dispatch.clone(),
                         if is_rename {
                             "Couldn't rename world"
+                        } else if is_restore {
+                            "Couldn't restore world"
                         } else {
                             "Couldn't duplicate world"
                         },
@@ -672,7 +716,7 @@ impl Component for ClusterWorlds {
                 body.to_string(),
                 Some(
                     TextInput::new(name_text)
-                        .placeholder(if is_rename { "World name" } else { "Copy name" })
+                        .placeholder("World name")
                         .width(Size::fill())
                         .into_element(),
                 ),
@@ -690,12 +734,20 @@ impl Component for ClusterWorlds {
                         .child(
                             Icon::new(if is_rename {
                                 IconType::Pencil01
+                            } else if is_restore {
+                                IconType::ClockRewind
                             } else {
                                 IconType::Copy01
                             })
                             .size(14.),
                         )
-                        .text(if is_rename { "Rename" } else { "Duplicate" })
+                        .text(if is_rename {
+                            "Rename"
+                        } else if is_restore {
+                            "Restore"
+                        } else {
+                            "Duplicate"
+                        })
                         .into_element(),
                 ],
             )
@@ -716,6 +768,7 @@ impl Component for ClusterWorlds {
                     .collect(),
             ))
             .maybe_child(menu_overlay)
+            .maybe_child(snapshots_overlay)
             .maybe_child(confirm_overlay)
             .maybe_child(prompt_overlay)
             .into_element()
@@ -861,4 +914,273 @@ impl Component for WorldCard {
                 .child(kebab_button(self.on_context.clone()))
         }
     }
+}
+
+#[derive(PartialEq)]
+struct WorldSnapshotsModal {
+    cluster_id: i64,
+    world: String,
+    on_restore: EventHandler<(String, String)>,
+    on_close: EventHandler<()>,
+}
+
+impl Component for WorldSnapshotsModal {
+    fn render(&self) -> impl IntoElement {
+        let query = use_world_snapshots(self.cluster_id, self.world.clone());
+        let snapshots = try_world_snapshots(&query).unwrap_or_default();
+        let dispatch = use_dispatch();
+        let mut pending_delete = use_state(|| None::<String>);
+        let close_scrim = self.on_close.clone();
+        let close_button = self.on_close.clone();
+        let on_restore = self.on_restore.clone();
+        let world = self.world.clone();
+        let empty = snapshots.is_empty();
+
+        let rows: Vec<Element> = snapshots
+            .iter()
+            .map(|snapshot| {
+                snapshot_row(
+                    self.cluster_id,
+                    world.clone(),
+                    snapshot,
+                    *pending_delete.read() == Some(snapshot.file.clone()),
+                    dispatch.clone(),
+                    pending_delete,
+                    on_restore.clone(),
+                )
+                .into_element()
+            })
+            .collect();
+
+        let snapshot_now = {
+            let dispatch = dispatch.clone();
+            let world = self.world.clone();
+            Button::new()
+                .secondary()
+                .on_press(move |_| {
+                    let dispatch = dispatch.clone();
+                    let world = world.clone();
+                    spawn_forever(async move {
+                        match snapshot_world(cluster_id, world).await {
+                            Ok(Some(snapshot)) => {
+                                dispatch
+                                    .notify("Snapshot saved")
+                                    .body(format!("{} archived.", format_size(snapshot.size_bytes)))
+                                    .info()
+                                    .toast_only()
+                                    .send();
+                            }
+                            Ok(None) => {
+                                dispatch
+                                    .notify("Already up to date")
+                                    .body("Nothing changed since the newest snapshot.")
+                                    .info()
+                                    .toast_only()
+                                    .send();
+                            }
+                            Err(err) => {
+                                dispatch
+                                    .notify("Couldn't snapshot world")
+                                    .body(err.to_string())
+                                    .error()
+                                    .send();
+                            }
+                        }
+                    });
+                })
+                .child(Icon::new(IconType::ClockRewind).size(14.))
+                .text("Snapshot now")
+        };
+
+        OverlayPopup::new()
+            .on_close(move |()| close_scrim.call(()))
+            .child(
+                rect()
+                    .width(Size::window_percent(100.))
+                    .height(Size::window_percent(100.))
+                    .center()
+                    .child(
+                        rect()
+                            .vertical()
+                            .width(Size::px(560.))
+                            .max_width(Size::window_percent(92.))
+                            .max_height(Size::window_percent(84.))
+                            .spacing(14.)
+                            .padding(Gaps::new_all(20.))
+                            .corner_radius(CornerRadius::new_all(16.))
+                            .background(colors::page_elevated())
+                            .border(border_all_color(1., colors::component_border()))
+                            .child(
+                                label()
+                                    .text(format!("Snapshots \u{2014} {}", self.world))
+                                    .font_size(18.)
+                                    .font_weight(FontWeight::SEMI_BOLD)
+                                    .color(colors::fg_primary()),
+                            )
+                            .child(
+                                label()
+                                    .text("Saved automatically before a launch that changes this world, kept in the version's launcher folder.")
+                                    .font_size(12.)
+                                    .color(colors::fg_secondary()),
+                            )
+                            .child(
+                                ScrollView::new()
+                                    .width(Size::fill())
+                                    .height(Size::Inner)
+                                    .max_height(Size::px(360.))
+                                    .child(
+                                        rect()
+                                            .vertical()
+                                            .width(Size::fill())
+                                            .spacing(8.)
+                                            .maybe_child(empty.then(|| {
+                                                label()
+                                                    .text("No snapshots yet. They appear here after a launch or with Snapshot now.")
+                                                    .font_size(12.)
+                                                    .color(colors::fg_secondary())
+                                                    .into_element()
+                                            }))
+                                            .children(rows),
+                                    ),
+                            )
+                            .child(
+                                rect()
+                                    .horizontal()
+                                    .width(Size::fill())
+                                    .spacing(8.)
+                                    .main_align(Alignment::End)
+                                    .child(snapshot_now)
+                                    .child(
+                                        Button::new()
+                                            .secondary()
+                                            .on_press(move |_| close_button.call(()))
+                                            .text("Close"),
+                                    ),
+                            ),
+                    ),
+            )
+    }
+}
+
+fn snapshot_row(
+    cluster_id: i64,
+    world: String,
+    snapshot: &WorldSnapshot,
+    armed: bool,
+    dispatch: Actions,
+    mut pending_delete: State<Option<String>>,
+    on_restore: EventHandler<(String, String)>,
+) -> impl IntoElement {
+    let actions: Element = if armed {
+        let world_for_delete = world.clone();
+        let file_for_delete = snapshot.file.clone();
+        let dispatch_for_delete = dispatch.clone();
+        let mut delete_state = pending_delete;
+        let mut keep_state = pending_delete;
+        rect()
+            .horizontal()
+            .spacing(6.)
+            .cross_align(Alignment::Center)
+            .child(
+                Button::new()
+                    .danger()
+                    .small()
+                    .on_press(move |_| {
+                        let world = world_for_delete.clone();
+                        let file = file_for_delete.clone();
+                        let dispatch = dispatch_for_delete.clone();
+                        delete_state.set(None);
+                        spawn_forever(async move {
+                            match delete_world_snapshot(cluster_id, world, file).await {
+                                Ok(()) => {
+                                    dispatch
+                                        .notify("Snapshot deleted")
+                                        .info()
+                                        .toast_only()
+                                        .send();
+                                }
+                                Err(err) => {
+                                    dispatch
+                                        .notify("Couldn't delete snapshot")
+                                        .body(err.to_string())
+                                        .error()
+                                        .send();
+                                }
+                            }
+                        });
+                    })
+                    .text("Delete"),
+            )
+            .child(
+                Button::new()
+                    .ghost()
+                    .small()
+                    .on_press(move |_| keep_state.set(None))
+                    .text("Keep"),
+            )
+            .into_element()
+    } else {
+        let restore_world = world.clone();
+        let restore_file = snapshot.file.clone();
+        let mut restore_handler = on_restore;
+        let mut arm_state = pending_delete;
+        let file_for_arm = snapshot.file.clone();
+        rect()
+            .horizontal()
+            .spacing(6.)
+            .cross_align(Alignment::Center)
+            .child(
+                Button::new()
+                    .secondary()
+                    .small()
+                    .on_press(move |_| {
+                        restore_handler.call((restore_world.clone(), restore_file.clone()));
+                    })
+                    .text("Restore"),
+            )
+            .child(
+                Button::new()
+                    .ghost()
+                    .small()
+                    .on_press(move |_| arm_state.set(Some(file_for_arm.clone())))
+                    .tooltip("Delete this snapshot")
+                    .child(Icon::new(IconType::Trash01).size(13.)),
+            )
+            .into_element()
+    };
+
+    rect()
+        .horizontal()
+        .width(Size::fill())
+        .spacing(10.)
+        .cross_align(Alignment::Center)
+        .padding(Gaps::new_all(10.))
+        .corner_radius(CornerRadius::new_all(10.))
+        .background(colors::component_bg())
+        .border(border_all_color(1., colors::component_border()))
+        .child(
+            Icon::new(IconType::ClockRewind)
+                .size(14.)
+                .color(colors::fg_secondary()),
+        )
+        .child(
+            rect()
+                .vertical()
+                .width(Size::flex(1.))
+                .spacing(2.)
+                .child(
+                    label()
+                        .text(fmt_date(snapshot.created))
+                        .font_size(13.)
+                        .font_weight(FontWeight::MEDIUM)
+                        .color(colors::fg_primary()),
+                )
+                .child(
+                    label()
+                        .text(format_size(snapshot.size_bytes))
+                        .font_size(11.)
+                        .color(colors::fg_secondary()),
+                ),
+        )
+        .child(actions)
 }

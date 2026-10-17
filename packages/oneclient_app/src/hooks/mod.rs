@@ -75,10 +75,11 @@ pub use queries::{
     versions_total,
 };
 pub use queries::{
-    add_world_datapacks, backup_world, delete_world, delete_world_datapack, duplicate_world,
-    import_world_zip, invalidate_world_contents, rename_world, spawn_world_task,
-    try_cluster_worlds, try_world_datapacks, try_world_size, use_cluster_worlds,
-    use_saves_folder_watch, use_world_datapacks, use_world_size,
+    add_world_datapacks, backup_world, delete_world, delete_world_datapack, delete_world_snapshot,
+    duplicate_world, import_world_zip, invalidate_world_contents, rename_world,
+    restore_world_snapshot, snapshot_world, spawn_world_task, try_cluster_worlds,
+    try_world_datapacks, try_world_size, try_world_snapshots, use_cluster_worlds,
+    use_saves_folder_watch, use_world_datapacks, use_world_size, use_world_snapshots,
 };
 
 use crate::notifications::NotificationSnapshot;

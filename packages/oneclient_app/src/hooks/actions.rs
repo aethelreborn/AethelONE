@@ -2262,6 +2262,10 @@ async fn launch(actions: &Actions, cluster_id: ClusterId, quick_play: Option<Qui
     // place before the game process reads them
     crate::view::app::skins::inject::sync_before_launch(&state, cluster_id, &account).await;
 
+    // World snapshots run before the game starts so each one captures the
+    // state the session begins from
+    snapshot_worlds_before_launch(&state, cluster_id).await;
+
     off_ui(async move {
         if let Err(err) =
             oneclient_core::launch_cluster(&state, cluster_id, &account, true, quick_play.clone())
@@ -2278,6 +2282,42 @@ async fn launch(actions: &Actions, cluster_id: ClusterId, quick_play: Option<Qui
         }
     })
     .await;
+}
+
+/// Snapshots every world that changed since its newest snapshot so a bad
+/// session can never quietly overwrite the previous state. Best effort: a
+/// failed world backup is reported but never stops the launch.
+async fn snapshot_worlds_before_launch(
+    state: &oneclient_core::LauncherState,
+    cluster_id: ClusterId,
+) {
+    let keep = {
+        let settings = state.settings.read();
+        if !settings.auto_world_backups {
+            return;
+        }
+        settings.world_backup_retention
+    };
+
+    let Ok(cluster) = state.clusters.get(cluster_id).await else {
+        return;
+    };
+
+    match oneclient_core::snapshot_changed_worlds(&cluster, keep).await {
+        Ok(saved) if !saved.is_empty() => {
+            tracing::info!(cluster_id, ?saved, "world snapshots saved before launch");
+        }
+        Ok(_) => {}
+        Err(err) => {
+            state
+                .services
+                .events
+                .notify("World backup failed")
+                .body(err.to_string())
+                .error()
+                .send();
+        }
+    }
 }
 
 /// Only ever one retry if the game still will not start after a full rehash and

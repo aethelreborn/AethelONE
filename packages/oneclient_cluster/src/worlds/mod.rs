@@ -11,6 +11,7 @@ use crate::zipwalk::zip_dir_recursive;
 
 const SAVES_DIR: &str = "saves";
 const DATAPACKS_DIR: &str = "datapacks";
+const WORLD_BACKUPS_DIR: &str = "world_backups";
 pub const LEVEL_DAT: &str = "level.dat";
 pub const WORLD_ICON: &str = "icon.png";
 const PACK_META: &str = "pack.mcmeta";
@@ -302,6 +303,201 @@ async fn promote_single_world_folder(target: &Path) {
     let _ = polyio::remove_dir_all(&root).await;
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorldSnapshot {
+    pub file: String,
+    pub created: DateTime<Utc>,
+    pub size_bytes: u64,
+}
+
+/// Snapshots live in the cluster's launcher data folder, never inside the
+/// game folder, so they survive repairs, migrations and shared `.minecraft`
+/// cleanups and never show up in the worlds list themselves.
+fn snapshot_dir(cluster: &Cluster, world: &str) -> ClusterResult<PathBuf> {
+    Ok(cluster
+        .dir()?
+        .join(WORLD_BACKUPS_DIR)
+        .join(plain_name(world)?))
+}
+
+/// Newest first. File names carry a zero-padded timestamp so they sort
+/// lexically the same way they sort in time.
+#[tracing::instrument(level = "debug", skip(cluster), fields(cluster_id = cluster.id))]
+pub async fn list_world_snapshots(
+    cluster: &Cluster,
+    world: &str,
+) -> ClusterResult<Vec<WorldSnapshot>> {
+    let dir = snapshot_dir(cluster, world)?;
+    let mut out = Vec::new();
+
+    let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
+        return Ok(out);
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("zip") {
+            continue;
+        }
+        let Some(file) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let Ok(meta) = entry.metadata().await else {
+            continue;
+        };
+
+        out.push(WorldSnapshot {
+            file,
+            created: meta
+                .modified()
+                .map(DateTime::<Utc>::from)
+                .unwrap_or_else(|_| Utc::now()),
+            size_bytes: meta.len(),
+        });
+    }
+
+    out.sort_by(|a, b| b.file.cmp(&a.file));
+    Ok(out)
+}
+
+/// Takes a snapshot only when something in the world changed since the
+/// newest one, so an unchanged world never grows a pile of identical zips.
+#[tracing::instrument(level = "debug", skip(cluster), fields(cluster_id = cluster.id))]
+pub async fn snapshot_world(
+    cluster: &Cluster,
+    world: &str,
+    keep: usize,
+) -> ClusterResult<Option<WorldSnapshot>> {
+    let from = world_dir(cluster, world)?;
+    let dir = snapshot_dir(cluster, world)?;
+
+    let newest = list_world_snapshots(cluster, world)
+        .await?
+        .into_iter()
+        .next();
+    if let Some(newest) = &newest {
+        let since = newest.created;
+        let changed = tokio::task::spawn_blocking(move || dir_modified_after(&from, since))
+            .await
+            .map_err(std::io::Error::other)?;
+        if !changed {
+            return Ok(None);
+        }
+    }
+
+    polyio::create_dir_all(&dir)
+        .await
+        .map_err(|err| WorldsError::Backup(err.to_string()))?;
+    let file = format!("{}.zip", Utc::now().format("%Y%m%d-%H%M%S%.6f"));
+    let dest = dir.join(&file);
+    backup_world(cluster, world, &dest).await?;
+    prune_world_snapshots(cluster, world, keep).await?;
+
+    let meta = tokio::fs::metadata(&dest).await.ok();
+    Ok(Some(WorldSnapshot {
+        file,
+        created: meta
+            .as_ref()
+            .and_then(|meta| meta.modified().ok())
+            .map(DateTime::<Utc>::from)
+            .unwrap_or_else(Utc::now),
+        size_bytes: meta.map_or(0, |meta| meta.len()),
+    }))
+}
+
+/// Best effort: one broken world must not stop the others or the launch,
+/// so failures are logged and the successful names are returned.
+#[tracing::instrument(level = "debug", skip(cluster), fields(cluster_id = cluster.id))]
+pub async fn snapshot_changed_worlds(cluster: &Cluster, keep: usize) -> ClusterResult<Vec<String>> {
+    let mut saved = Vec::new();
+
+    for info in list_cluster_worlds(cluster)? {
+        match snapshot_world(cluster, &info.folder_name, keep).await {
+            Ok(Some(_)) => saved.push(info.folder_name),
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(world = %info.folder_name, error = %err, "world snapshot failed");
+            }
+        }
+    }
+
+    Ok(saved)
+}
+
+async fn prune_world_snapshots(cluster: &Cluster, world: &str, keep: usize) -> ClusterResult<()> {
+    if keep == 0 {
+        return Ok(());
+    }
+
+    let dir = snapshot_dir(cluster, world)?;
+    for stale in list_world_snapshots(cluster, world)
+        .await?
+        .into_iter()
+        .skip(keep)
+    {
+        let _ = polyio::remove_file(dir.join(&stale.file)).await;
+    }
+    Ok(())
+}
+
+#[tracing::instrument(level = "debug", skip(cluster), fields(cluster_id = cluster.id))]
+pub async fn delete_world_snapshot(
+    cluster: &Cluster,
+    world: &str,
+    file: &str,
+) -> ClusterResult<()> {
+    let path = world_snapshot_path(cluster, world, file)?;
+
+    match polyio::try_exists(&path).await {
+        Ok(false) => Ok(()),
+        Ok(true) => polyio::remove_file(&path)
+            .await
+            .map_err(|err| WorldsError::Backup(err.to_string()).into()),
+        Err(err) => Err(WorldsError::Backup(err.to_string()).into()),
+    }
+}
+
+/// Absolute path of a stored snapshot, for restore flows
+pub fn world_snapshot_path(cluster: &Cluster, world: &str, file: &str) -> ClusterResult<PathBuf> {
+    if !file.ends_with(".zip") {
+        return Err(WorldsError::InvalidName(file.to_string()).into());
+    }
+    Ok(snapshot_dir(cluster, world)?.join(plain_name(file)?))
+}
+
+/// True when any file in the world tree is newer than the newest snapshot.
+/// Unreadable entries count as changed so the backup errs on the safe side.
+fn dir_modified_after(dir: &Path, since: DateTime<Utc>) -> bool {
+    let since: std::time::SystemTime = since.into();
+    let mut stack = vec![dir.to_path_buf()];
+
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            return true;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                return true;
+            };
+            if kind.is_dir() {
+                stack.push(entry.path());
+                continue;
+            }
+            match entry.metadata().and_then(|meta| meta.modified()) {
+                Ok(modified) if modified > since => return true,
+                Ok(_) => {}
+                Err(_) => return true,
+            }
+        }
+    }
+
+    false
+}
+
 #[tracing::instrument(level = "debug", skip(cluster), fields(cluster_id = cluster.id))]
 pub async fn list_world_datapacks(
     cluster: &Cluster,
@@ -492,7 +688,7 @@ fn strip_formatting(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use async_zip::{Compression, ZipEntryBuilder};
     use oneclient_common::domain::GameLoader;
@@ -737,6 +933,125 @@ mod tests {
             import_world_zip(&cluster, "empty", &empty).await,
             Err(ClusterError::Worlds(WorldsError::Restore(_)))
         ));
+
+        let _ = std::fs::remove_dir_all(root.join("clusters/alpha"));
+    }
+
+    fn age_world_file(world: &Path, ahead: u64) {
+        let changed = std::time::SystemTime::now() + std::time::Duration::from_secs(ahead);
+        std::fs::File::options()
+            .write(true)
+            .open(world.join(LEVEL_DAT))
+            .unwrap()
+            .set_modified(changed)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshots_skip_unchanged_worlds_and_prune_to_keep() {
+        let _guard = lock();
+        let root = test_root();
+        std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
+        let world = seed_world("snap_world");
+        let cluster = cluster();
+
+        let saved = snapshot_changed_worlds(&cluster, 2).await.unwrap();
+        assert_eq!(saved, vec!["snap_world".to_string()]);
+        let first = list_world_snapshots(&cluster, "snap_world").await.unwrap();
+        assert_eq!(first.len(), 1);
+        assert!(first[0].size_bytes > 0);
+
+        let saved = snapshot_changed_worlds(&cluster, 2).await.unwrap();
+        assert!(
+            saved.is_empty(),
+            "an untouched world is not snapshotted again"
+        );
+
+        age_world_file(&world, 5);
+        let saved = snapshot_changed_worlds(&cluster, 2).await.unwrap();
+        assert_eq!(saved, vec!["snap_world".to_string()]);
+        let two = list_world_snapshots(&cluster, "snap_world").await.unwrap();
+        assert_eq!(two.len(), 2);
+        assert!(two[0].file > two[1].file, "newest snapshot sorts first");
+
+        age_world_file(&world, 10);
+        let saved = snapshot_changed_worlds(&cluster, 2).await.unwrap();
+        assert_eq!(saved, vec!["snap_world".to_string()]);
+        let kept = list_world_snapshots(&cluster, "snap_world").await.unwrap();
+        assert_eq!(kept.len(), 2, "retention prunes the oldest snapshot");
+        assert!(!kept.iter().any(|snapshot| snapshot.file == first[0].file));
+        assert!(
+            !world_snapshot_path(&cluster, "snap_world", &first[0].file)
+                .unwrap()
+                .is_file()
+        );
+
+        let _ = std::fs::remove_dir_all(root.join("clusters/alpha"));
+    }
+
+    #[tokio::test]
+    async fn snapshot_delete_rejects_paths_and_tolerates_misses() {
+        let _guard = lock();
+        let root = test_root();
+        std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
+        seed_world("snap_delete");
+        let cluster = cluster();
+
+        assert!(matches!(
+            delete_world_snapshot(&cluster, "snap_delete", "../escape.zip").await,
+            Err(ClusterError::Worlds(WorldsError::InvalidName(_)))
+        ));
+        assert!(matches!(
+            world_snapshot_path(&cluster, "snap_delete", "notes.txt"),
+            Err(ClusterError::Worlds(WorldsError::InvalidName(_)))
+        ));
+
+        snapshot_world(&cluster, "snap_delete", 5).await.unwrap();
+        let snapshots = list_world_snapshots(&cluster, "snap_delete").await.unwrap();
+        assert_eq!(snapshots.len(), 1);
+
+        delete_world_snapshot(&cluster, "snap_delete", &snapshots[0].file)
+            .await
+            .expect("delete removes the snapshot");
+        assert!(
+            list_world_snapshots(&cluster, "snap_delete")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        delete_world_snapshot(&cluster, "snap_delete", &snapshots[0].file)
+            .await
+            .expect("deleting a missing snapshot is a no-op");
+
+        let _ = std::fs::remove_dir_all(root.join("clusters/alpha"));
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_restores_into_a_new_world() {
+        let _guard = lock();
+        let root = test_root();
+        std::fs::create_dir_all(root.join("clusters/alpha")).unwrap();
+        seed_world("snap_restore");
+        let cluster = cluster();
+
+        snapshot_world(&cluster, "snap_restore", 5).await.unwrap();
+        let snapshot = list_world_snapshots(&cluster, "snap_restore")
+            .await
+            .unwrap()
+            .remove(0);
+        let path = world_snapshot_path(&cluster, "snap_restore", &snapshot.file).unwrap();
+
+        import_world_zip(&cluster, "restored", &path)
+            .await
+            .expect("snapshot restores as a fresh world");
+
+        let restored = saves_dir().join("restored");
+        assert_eq!(std::fs::read(restored.join(LEVEL_DAT)).unwrap(), b"level");
+        assert_eq!(
+            std::fs::read(restored.join("data/region.dat")).unwrap(),
+            b"regions"
+        );
 
         let _ = std::fs::remove_dir_all(root.join("clusters/alpha"));
     }

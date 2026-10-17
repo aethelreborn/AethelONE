@@ -68,6 +68,16 @@ impl Component for SettingsLauncher {
             move || v
         });
 
+        let auto_world_backups = use_state({
+            let v = settings.auto_world_backups;
+            move || v
+        });
+
+        let world_backup_retention = use_state({
+            let v = settings.world_backup_retention;
+            move || v
+        });
+
         let auto_update = use_state({
             let v = settings.auto_update;
             move || v
@@ -86,6 +96,8 @@ impl Component for SettingsLauncher {
             let tray = *show_tray_icon.read();
             let behaviour = *launch_behaviour.read();
             let bundled_removal = *allow_bundled_removal.read();
+            let world_backups = *auto_world_backups.read();
+            let backup_retention = *world_backup_retention.read();
             let updates = *auto_update.read();
             if *first.peek() {
                 first.set(false);
@@ -100,6 +112,8 @@ impl Component for SettingsLauncher {
                 next.show_tray_icon = tray;
                 next.launch_behaviour = behaviour;
                 next.allow_bundled_mod_removal = bundled_removal;
+                next.auto_world_backups = world_backups;
+                next.world_backup_retention = backup_retention;
                 next.auto_update = updates;
             });
         });
@@ -207,6 +221,27 @@ impl Component for SettingsLauncher {
                     defaults.run_in_background,
                 ),
             ))
+            .child(settings_row_focus(
+                "launcher.world_backups",
+                IconType::ClockRewind,
+                "World Backups",
+                "Before a launch that would change them, worlds are snapshotted into the version's launcher folder. Restore any snapshot from the Worlds page.",
+                resettable(
+                    toggle(auto_world_backups),
+                    auto_world_backups,
+                    defaults.auto_world_backups,
+                ),
+            ))
+            .child(settings_row(
+                IconType::Database01,
+                "Backups Kept",
+                "How many snapshots to keep per world. The oldest are replaced first.",
+                resettable(
+                    retention_field(world_backup_retention),
+                    world_backup_retention,
+                    defaults.world_backup_retention,
+                ),
+            ))
             .child(settings_row(
                 IconType::LayoutTop,
                 "Show Tray Icon",
@@ -250,6 +285,21 @@ fn launch_behaviour_field(mut selected: State<LaunchBehaviour>) -> impl IntoElem
         .on_select(move |idx: usize| {
             if let Some(behaviour) = LaunchBehaviour::ALL.get(idx).copied() {
                 selected.set(behaviour);
+            }
+        })
+}
+
+const RETENTION_CHOICES: [usize; 4] = [5, 10, 20, 50];
+
+fn retention_field(mut selected: State<usize>) -> impl IntoElement {
+    let options: Vec<String> = RETENTION_CHOICES.iter().map(usize::to_string).collect();
+
+    Dropdown::new(selected.read().to_string(), options)
+        .width(Size::px(120.))
+        .height(Size::px(34.))
+        .on_select(move |idx: usize| {
+            if let Some(count) = RETENTION_CHOICES.get(idx).copied() {
+                selected.set(count);
             }
         })
 }

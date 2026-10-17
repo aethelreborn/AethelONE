@@ -66,6 +66,11 @@ pub struct LauncherSettings {
     pub allow_parallel_running_clusters: bool,
     /// Offers Delete for bundle-managed mods (e.g. OneConfig) that are normally pinned to their instance bundles
     pub allow_bundled_mod_removal: bool,
+    /// Snapshots worlds into the cluster's data folder before every launch
+    /// that would change them
+    pub auto_world_backups: bool,
+    /// Newest snapshots kept per world; 0 keeps every snapshot
+    pub world_backup_retention: usize,
     pub launch_behaviour: LaunchBehaviour,
     pub run_in_background: bool,
     pub show_tray_icon: bool,
@@ -130,6 +135,8 @@ impl Default for LauncherSettings {
             global_game_settings: GameSettingsProfile::default_global_profile(),
             allow_parallel_running_clusters: true,
             allow_bundled_mod_removal: false,
+            auto_world_backups: false,
+            world_backup_retention: 5,
             launch_behaviour: LaunchBehaviour::default(),
             run_in_background: false,
             show_tray_icon: true,
@@ -188,5 +195,12 @@ mod tests {
     fn favorite_clusters_defaults_to_empty() {
         let legacy: LauncherSettings = serde_json::from_str("{}").expect("missing fields default");
         assert!(legacy.favorite_clusters.is_empty());
+    }
+
+    #[test]
+    fn world_backups_stay_opt_in() {
+        let legacy: LauncherSettings = serde_json::from_str("{}").expect("missing fields default");
+        assert!(!legacy.auto_world_backups);
+        assert_eq!(legacy.world_backup_retention, 5);
     }
 }
