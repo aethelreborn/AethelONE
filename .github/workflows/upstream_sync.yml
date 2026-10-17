@@ -132,10 +132,19 @@ jobs:
         run: |
           set -euo pipefail
           version="$(sed -n -E '/^\[workspace\.package\]/,/^\[/ s/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' Cargo.toml | head -n1)"
+          dispatch=1
           if compgen -G ".changeset/*.md" > /dev/null; then
             echo "Changesets pending - releasing will cut a new version."
           elif ! git ls-remote --exit-code --tags origin "refs/tags/oneclient-$version" >/dev/null 2>&1; then
             echo "Version $version has not been released on this repo yet."
+          elif [ "$(gh release view "oneclient-$version" --repo "${GITHUB_REPOSITORY}" --json isDraft,assets --jq '.isDraft and ([.assets[].name] | index("latest.json") != null)')" = "true" ]; then
+            # A previous release build can die after its draft was cut (an
+            # upload hiccup once stranded a complete draft behind its tag).
+            # latest.json only exists when the manifest leg ran, which needs
+            # every package leg green, so this draft is safe to publish and
+            # rebuilding would only re-upload identical assets.
+            echo "A complete draft is waiting for oneclient-$version - publishing it."
+            dispatch=0
           else
             echo "oneclient-$version already released and no changesets - nothing to release."
             exit 0
@@ -144,13 +153,15 @@ jobs:
           # Every gh call below is pinned to this repository: gh's git-remote
           # detection in this job can resolve to the upstream remote instead of
           # the fork, and a dispatch against Polyfrost/OneLauncher is a 403.
-          gh workflow run oneclient_release.yml --repo "${GITHUB_REPOSITORY}"
-          sleep 30
-          run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow oneclient_release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
-          echo "Watching release run $run_id"
-          # --exit-status fails the sync run when the release fails, so the next
-          # schedule retries (the release workflow reuses its draft).
-          gh run watch "$run_id" --repo "${GITHUB_REPOSITORY}" --exit-status --interval 30 > /dev/null
+          if [ "$dispatch" = "1" ]; then
+            gh workflow run oneclient_release.yml --repo "${GITHUB_REPOSITORY}"
+            sleep 30
+            run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow oneclient_release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+            echo "Watching release run $run_id"
+            # --exit-status fails the sync run when the release fails, so the next
+            # schedule retries (the release workflow reuses its draft).
+            gh run watch "$run_id" --repo "${GITHUB_REPOSITORY}" --exit-status --interval 30 > /dev/null
+          fi
 
           # The release workflow ships a draft for a human to publish; this fork
           # publishes it once every leg is green. The draft targets the version
