@@ -134,7 +134,7 @@ impl Component for ClusterWorlds {
         let mut pending_delete = use_state(|| None::<Vec<String>>);
         let mut prompt = use_state(|| None::<WorldOp>);
         let mut name_text = use_state(String::new);
-        let mut snapshots_for = use_state(|| None::<String>);
+        let snapshots_for = use_state(|| None::<String>);
         let selection = use_selection::<String>();
 
         let Some(cluster) = cluster else {
@@ -929,7 +929,7 @@ impl Component for WorldSnapshotsModal {
         let query = use_world_snapshots(self.cluster_id, self.world.clone());
         let snapshots = try_world_snapshots(&query).unwrap_or_default();
         let dispatch = use_dispatch();
-        let mut pending_delete = use_state(|| None::<String>);
+        let pending_delete = use_state(|| None::<String>);
         let close_scrim = self.on_close.clone();
         let close_button = self.on_close.clone();
         let on_restore = self.on_restore.clone();
@@ -1069,7 +1069,7 @@ fn snapshot_row(
     snapshot: &WorldSnapshot,
     armed: bool,
     dispatch: Actions,
-    mut pending_delete: State<Option<String>>,
+    pending_delete: State<Option<String>>,
     on_restore: EventHandler<(String, String)>,
 ) -> impl IntoElement {
     let actions: Element = if armed {
@@ -1123,7 +1123,7 @@ fn snapshot_row(
     } else {
         let restore_world = world.clone();
         let restore_file = snapshot.file.clone();
-        let mut restore_handler = on_restore;
+        let restore_handler = on_restore;
         let mut arm_state = pending_delete;
         let file_for_arm = snapshot.file.clone();
         rect()

@@ -98,7 +98,7 @@ pub use settings_profiles::{
     try_game_profile, use_cluster_profile, use_cluster_settings, use_game_profile,
     use_named_profiles,
 };
-pub use skin::{invalidate_local_skin_queries, use_local_active_skin, use_player_skin};
+pub use skin::{invalidate_local_skin_queries, use_player_skin};
 pub use state::{query_error, query_is_busy, query_is_loading, settled_or_loading};
 pub use storage::{
     DiscardLeftoversKeys, DiscardLeftoversMutation, LeftoversQuery, StorageAction,

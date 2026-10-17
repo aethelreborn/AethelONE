@@ -416,7 +416,7 @@ pub async fn snapshot_changed_worlds(cluster: &Cluster, keep: usize) -> ClusterR
     let mut saved = Vec::new();
 
     for info in list_cluster_worlds(cluster)? {
-        match snapshot_world(cluster, &info.folder_name, keep).await {
+        match Box::pin(snapshot_world(cluster, &info.folder_name, keep)).await {
             Ok(Some(_)) => saved.push(info.folder_name),
             Ok(None) => {}
             Err(err) => {
