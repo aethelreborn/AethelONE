@@ -221,13 +221,17 @@ fn equip_selected(
         .unwrap_or_default();
     library.write().set_active(Some(id));
     invalidate_local_skin();
-    status.set(Some((
-        format!(
+    let message = match texture {
+        TextureKind::Skin => format!(
             "{} equipped — offline accounts will wear it in game",
             capitalize(texture.label())
         ),
-        false,
-    )));
+        _ => format!(
+            "{} equipped — worn by offline accounts, and by premium accounts that have none of their own",
+            capitalize(texture.label())
+        ),
+    };
+    status.set(Some((message, false)));
 }
 
 /// Avatars read the active skin from the library through a query, so they
@@ -510,7 +514,7 @@ fn side_panel(
         )
         .child(
             label()
-                .text("The equipped skin, cape and elytra install CustomSkinLoader into your versions automatically when you launch. They apply to offline accounts on 1.8 – 26.3.")
+                .text("The equipped skin, cape and elytra install CustomSkinLoader into your versions automatically when you launch. Skins apply to offline accounts; capes and elytras also fill in for premium accounts that have none of their own — 1.8 – 26.3.")
                 .font_size(12.)
                 .color(colors::fg_secondary()),
         )

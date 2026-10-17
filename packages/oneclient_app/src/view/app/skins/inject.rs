@@ -45,23 +45,20 @@ async fn sync_inner(
     let mods_dir = oneclient_common::paths::cluster_mods_dir(&cluster.folder_name)
         .map_err(|err| err.to_string())?;
 
-    let skin = library.active_bytes_for(TextureKind::Skin);
-    let cape = library.active_bytes_for(TextureKind::Cape);
-    let elytra = library.active_bytes_for(TextureKind::Elytra);
+    let (skin, cape, elytra) = local_textures(
+        account.is_offline(),
+        library.active_bytes_for(TextureKind::Skin),
+        library.active_bytes_for(TextureKind::Cape),
+        library.active_bytes_for(TextureKind::Elytra),
+    );
     if skin.is_none() && cape.is_none() && elytra.is_none() {
         remove_csl_jars(&mods_dir)?;
-        return Ok(());
-    }
-
-    // CustomSkinLoader's local textures are only written for offline accounts;
-    // a premium account keeps the skin Mojang serves. Bail before doing any
-    // network or disk work rather than installing a jar that would do nothing.
-    if !account.is_offline() {
-        tracing::info!(
-            username = %account.username,
-            "active local textures are only applied to offline accounts; skipping customskinloader"
-        );
-        remove_csl_jars(&mods_dir)?;
+        if let Ok(game_dir) = cluster.game_dir() {
+            // Nothing is equipped; also drop the files of an earlier launch
+            // so a stale texture cannot resurface if CustomSkinLoader comes
+            // back
+            let _ = sync_local_textures(&game_dir, &account.username, None, None, None);
+        }
         return Ok(());
     }
 
@@ -100,11 +97,27 @@ async fn sync_inner(
         skin = skin.as_ref().map(|(entry, _)| entry.name.as_str()),
         cape = cape.as_ref().map(|(entry, _)| entry.name.as_str()),
         elytra = elytra.as_ref().map(|(entry, _)| entry.name.as_str()),
+        account = if account.is_offline() { "offline" } else { "premium" },
         mc_version = %cluster.mc_version,
         jar = %build.filename,
         "active local textures synced for launch"
     );
     Ok(())
+}
+
+/// CustomSkinLoader mixes the loaders in priority order and keeps the first
+/// texture it finds, and Mojang's authenticated textures have a far lower
+/// priority than LocalSkin — so a premium account always keeps the skin and
+/// cape Mojang serves. Writing the local skin for it would only matter when
+/// the Mojang API is unreachable, so it is dropped; local capes and elytras
+/// still fill in what the account has none of.
+fn local_textures<T>(
+    offline: bool,
+    skin: Option<T>,
+    cape: Option<T>,
+    elytra: Option<T>,
+) -> (Option<T>, Option<T>, Option<T>) {
+    (if offline { skin } else { None }, cape, elytra)
 }
 
 /// The Modrinth check failed (offline, transient error) or the download broke:
@@ -444,8 +457,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        has_csl_jar, install_jar, pick_github_build, pick_modrinth_build, remove_csl_jars_except,
-        sanitize_username, skin_file_name, sync_local_textures, version_matches,
+        has_csl_jar, install_jar, local_textures, pick_github_build, pick_modrinth_build,
+        remove_csl_jars_except, sanitize_username, skin_file_name, sync_local_textures,
+        version_matches,
     };
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -760,5 +774,33 @@ mod tests {
 
         assert!(!skins.join("Krish").exists());
         assert!(skins.join("Krish.png").exists());
+    }
+
+    #[test]
+    fn offline_accounts_keep_every_equipped_texture() {
+        let (skin, cape, elytra) = local_textures(
+            true,
+            Some(b"skin" as &[u8]),
+            Some(b"cape" as &[u8]),
+            Some(b"elytra" as &[u8]),
+        );
+        assert_eq!(skin, Some(b"skin" as &[u8]));
+        assert_eq!(cape, Some(b"cape" as &[u8]));
+        assert_eq!(elytra, Some(b"elytra" as &[u8]));
+    }
+
+    #[test]
+    fn premium_accounts_drop_only_the_skin() {
+        let (skin, cape, elytra) =
+            local_textures(false, Some(b"skin" as &[u8]), Some(b"cape" as &[u8]), None);
+        assert_eq!(skin, None);
+        assert_eq!(cape, Some(b"cape" as &[u8]));
+        assert_eq!(elytra, None);
+    }
+
+    #[test]
+    fn a_premium_account_with_only_a_skin_equips_nothing() {
+        let (skin, cape, elytra) = local_textures(false, Some(b"skin"), None, None);
+        assert!(skin.is_none() && cape.is_none() && elytra.is_none());
     }
 }
