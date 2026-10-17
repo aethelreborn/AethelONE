@@ -477,7 +477,7 @@ mod tests {
         );
         assert_eq!(
             deps,
-            vec!["also-required".to_string(), "required".to_string()]
+            vec!["required".to_string(), "also-required".to_string()]
         );
     }
 
