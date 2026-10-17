@@ -1,5 +1,5 @@
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,12 +13,14 @@ use crate::ClusterStage;
 use crate::LauncherResult;
 use crate::clusters::Cluster;
 use crate::game::GameError;
+use crate::game::crash_triage::{self, CrashCandidate};
 use crate::game::session::SessionRecorder;
 use crate::game::tail::spawn_log_tail;
 use crate::settings::GameSettingsProfile;
 use crate::state::LauncherState;
 use oneclient_auth::MinecraftAccount;
 use oneclient_common::paths;
+use oneclient_content::packages::{ContentType, PackageStore};
 use oneclient_discord::Presence;
 use oneclient_events::{GroupedProgressSession, LaunchStage};
 use oneclient_mc::{
@@ -626,6 +628,114 @@ async fn start(
     Ok(LaunchedGame { cluster_id, pid })
 }
 
+/// Reads the newest crash report from this session and names the mods it
+/// blames best effort a missing report or unreadable mods list only means the
+/// notification says less
+async fn crash_suspicion(
+    state: &Arc<LauncherState>,
+    cluster: &Cluster,
+    started_at: DateTime<Utc>,
+) -> Option<String> {
+    let dir = cluster.dir().ok()?;
+    let report = newest_crash_report(&dir.join("crash-reports"), started_at)?;
+    let text = read_report_head(&report)?;
+    let candidates = crash_candidates(state, cluster.id).await;
+
+    let triage = crash_triage::triage(&text, &candidates);
+    if triage.suspects.is_empty() {
+        return None;
+    }
+
+    tracing::info!(
+        suspects = ?triage.suspects,
+        description = ?triage.description,
+        report = %report.display(),
+        "crash report names suspects"
+    );
+
+    let mut note = format!("Likely caused by {}", triage.suspects.join(", "));
+    if let Some(desc) = triage.description {
+        let desc: String = desc.chars().take(64).collect();
+        let _ = write!(note, " ({desc})");
+    }
+
+    Some(note)
+}
+
+/// Reports can run to megabytes but the description and the first frames are
+/// always near the top so only the head is read
+fn read_report_head(path: &Path) -> Option<String> {
+    use std::io::Read as _;
+
+    let file = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::with_capacity(64 * 1024);
+    file.take(256 * 1024).read_to_end(&mut buf).ok()?;
+
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Only reports written after this session started count a stale report from
+/// the last crash must not be blamed on an unrelated exit
+fn newest_crash_report(dir: &Path, started_at: DateTime<Utc>) -> Option<PathBuf> {
+    let cutoff = started_at - chrono::Duration::seconds(120);
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("crash-") || !name.ends_with(".txt") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        if DateTime::<Utc>::from(modified) < cutoff {
+            continue;
+        }
+        if newest.as_ref().is_none_or(|(time, _)| modified > *time) {
+            newest = Some((modified, path));
+        }
+    }
+
+    newest.map(|(_, path)| path)
+}
+
+/// The enabled mods a report could blame with the words its class names tend
+/// to carry
+async fn crash_candidates(state: &Arc<LauncherState>, cluster_id: i64) -> Vec<CrashCandidate> {
+    let Ok(linked) =
+        PackageStore::list_linked_artifacts(cluster_id, &state.services.content()).await
+    else {
+        return Vec::new();
+    };
+
+    linked
+        .into_iter()
+        .filter(|artifact| artifact.enabled && artifact.content_type == ContentType::Mod)
+        .filter_map(|artifact| {
+            let tokens = crash_triage::candidate_tokens(
+                artifact.display_name.as_deref(),
+                &artifact.file_name,
+            );
+            if tokens.is_empty() {
+                return None;
+            }
+
+            let label = artifact
+                .display_name
+                .unwrap_or_else(|| artifact.file_name.clone());
+
+            Some(CrashCandidate { label, tokens })
+        })
+        .collect()
+}
+
 async fn running_cluster_name(state: &Arc<LauncherState>, cluster_id: i64) -> String {
     state
         .clusters
@@ -754,13 +864,22 @@ pub(crate) async fn finalize_session(
     let name = &cluster.name;
     let crashed = !matches!(end.outcome, Exit::Observed { success: true, .. });
 
+    let suspicion = if crashed {
+        crash_suspicion(&state, cluster, end.started_at).await
+    } else {
+        None
+    };
+
     match end.outcome {
         Exit::Observed { success: true, .. } => {}
         Exit::Observed { display, .. } => state
             .services
             .events
             .notify("Game crashed")
-            .body(format!("{name} exited with {display}"))
+            .body(match suspicion {
+                Some(note) => format!("{name} exited with {display}. {note}"),
+                None => format!("{name} exited with {display}"),
+            })
             .error()
             .send(),
         Exit::Failed(err) => state

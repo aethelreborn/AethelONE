@@ -1,4 +1,5 @@
 mod analytics;
+mod crash_triage;
 mod error;
 pub mod fabric;
 pub mod gpu;
