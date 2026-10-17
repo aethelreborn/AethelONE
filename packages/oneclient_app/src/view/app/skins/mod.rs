@@ -13,7 +13,8 @@ pub mod inject;
 pub mod library;
 
 use library::{
-    Library, SkinEntry, SkinKind, fetch_by_name, fetch_url, file_display_name, validate_skin,
+    Library, SkinEntry, SkinKind, TextureKind, fetch_by_name, fetch_url, file_display_name,
+    validate_texture,
 };
 
 const CELL_WIDTH: f32 = 84.;
@@ -30,6 +31,7 @@ impl Component for AccountSkins {
         let account_name = account.as_ref().map(|a| a.username.clone());
 
         let library = use_state(Library::load);
+        let texture_kind = use_state(|| TextureKind::Skin);
         let selected = use_state(|| None::<String>);
         let url_input = use_state(String::new);
         let name_input = use_state(String::new);
@@ -53,15 +55,17 @@ impl Component for AccountSkins {
         let selected_entry = selected_id
             .as_deref()
             .and_then(|id| library.read().entry(id).cloned());
-        let active_id = library.read().active.clone();
+        let already_active = selected_entry.as_ref().is_some_and(|entry| {
+            library.read().active_for(entry.texture) == Some(entry.id.as_str())
+        });
         let busy_now = *busy.peek();
-        let already_active = selected_id.is_some() && selected_id == active_id;
 
         use_side_effect_with_deps(&selected_id, move |id| {
             let library = library.read();
             let slim = id
                 .as_deref()
                 .and_then(|id| library.entry(id))
+                .filter(|entry| entry.texture == TextureKind::Skin)
                 .map(|entry| entry.slim);
             if let Some(slim) = slim {
                 model_slim.set(slim);
@@ -101,10 +105,10 @@ impl Component for AccountSkins {
             ))
             .child(side_panel(
                 library,
+                texture_kind,
                 selected,
                 selected_id,
                 selected_entry,
-                active_id,
                 url_input,
                 name_input,
                 status,
@@ -133,9 +137,19 @@ fn preview_panel(
     }
 
     let caption = match (selected, account_name) {
-        (Some(entry), _) => format!("{} · preview", entry.name),
+        (Some(entry), _) if entry.texture == TextureKind::Skin => {
+            format!("{} · preview", entry.name)
+        }
+        (Some(entry), _) => format!("{} selected", entry.name),
         (None, Some(name)) => name,
         (None, None) => "No account signed in".to_string(),
+    };
+
+    let slim_control_enabled = selected.is_some_and(|entry| entry.texture == TextureKind::Skin);
+    let equip_label = match selected {
+        Some(entry) if already_active => format!("{} equipped", capitalize(entry.texture.label())),
+        Some(entry) => format!("Equip {}", entry.texture.label()),
+        None => "Equip skin".to_string(),
     };
 
     rect()
@@ -171,7 +185,7 @@ fn preview_panel(
                     SegmentedControl::new(model_slim)
                         .height(32.)
                         .equal_width(72.)
-                        .disabled(selected.is_none())
+                        .disabled(!slim_control_enabled)
                         .segment(Segment::new(true).label("Slim"))
                         .segment(Segment::new(false).label("Classic")),
                 ),
@@ -181,11 +195,7 @@ fn preview_panel(
                 .variant(ButtonVariant::Primary)
                 .width(Size::fill())
                 .disabled(!equip_enabled || already_active)
-                .text(if already_active {
-                    "Equipped"
-                } else {
-                    "Equip skin"
-                })
+                .text(equip_label)
                 .on_press(move |_| {
                     equip_selected(library, selected_state, status);
                 }),
@@ -201,13 +211,21 @@ fn equip_selected(
     mut status: State<Option<(String, bool)>>,
 ) {
     let Some(id) = selected.read().clone() else {
-        status.set(Some(("Select a skin first".to_string(), true)));
+        status.set(Some(("Select a texture first".to_string(), true)));
         return;
     };
+    let texture = library
+        .read()
+        .entry(&id)
+        .map(|entry| entry.texture)
+        .unwrap_or_default();
     library.write().set_active(Some(id));
     invalidate_local_skin();
     status.set(Some((
-        "Active — offline accounts will wear it in game".to_string(),
+        format!(
+            "{} equipped — offline accounts will wear it in game",
+            capitalize(texture.label())
+        ),
         false,
     )));
 }
@@ -252,35 +270,42 @@ fn apply_model_slim(
 #[allow(clippy::too_many_arguments)]
 fn side_panel(
     mut library: State<Library>,
+    texture_kind: State<TextureKind>,
     mut selected: State<Option<String>>,
     selected_id: Option<String>,
     selected_entry: Option<SkinEntry>,
-    active_id: Option<String>,
     url_input: State<String>,
     name_input: State<String>,
     mut status: State<Option<(String, bool)>>,
     busy: State<bool>,
     mut preview: State<Option<(Bytes, bool)>>,
 ) -> impl IntoElement {
-    let entry_count = library.read().skins.len();
+    let kind = *texture_kind.read();
+    let snapshot = library.read().clone();
+    let entries = snapshot.entries_for(kind);
+    let entry_count = entries.len();
     let is_busy = *busy.peek();
 
-    let rows: Vec<Vec<SkinEntry>> = library
-        .read()
-        .skins
-        .clone()
+    let rows: Vec<Vec<SkinEntry>> = entries
         .chunks(CELL_COLUMNS)
         .map(<[SkinEntry]>::to_vec)
         .collect();
 
     let grid = if rows.is_empty() {
+        let hint = match kind {
+            TextureKind::Skin => {
+                "Import a skin PNG, paste an image URL, or add a Mojang player name."
+            }
+            TextureKind::Cape => "Import a cape PNG or paste an image URL.",
+            TextureKind::Elytra => "Import an elytra PNG or paste an image URL.",
+        };
         rect()
             .center()
             .width(Size::fill())
             .height(Size::px(120.))
             .child(
                 label()
-                    .text("Import a skin PNG, paste an image URL, or add a Mojang player name.")
+                    .text(hint)
                     .font_size(13.)
                     .color(colors::fg_secondary()),
             )
@@ -289,7 +314,7 @@ fn side_panel(
         let rows = rows.into_iter().map(|row| {
             let cells = row.into_iter().map(|entry| {
                 let id = entry.id.clone();
-                let is_active = active_id.as_deref() == Some(entry.id.as_str());
+                let is_active = snapshot.active_for(entry.texture) == Some(entry.id.as_str());
                 let is_selected = selected_id.as_deref() == Some(entry.id.as_str());
 
                 skin_cell(entry.name, is_active, is_selected, move |_| {
@@ -311,6 +336,13 @@ fn side_panel(
 
     let remove_enabled = selected_entry.is_some() && !is_busy;
     let use_enabled = selected_entry.is_some() && !is_busy;
+    let use_label = format!(
+        "Use this {}",
+        selected_entry
+            .as_ref()
+            .map(|entry| entry.texture.label())
+            .unwrap_or("skin")
+    );
 
     rect()
         .vertical()
@@ -326,9 +358,27 @@ fn side_panel(
                 .color(colors::fg_primary()),
         )
         .child(
-            rect().horizontal().spacing(12.).child(import_button(
-                library, selected, status, preview, busy,
-            )),
+            rect().horizontal().child(
+                SegmentedControl::new(texture_kind)
+                    .height(32.)
+                    .equal_width(84.)
+                    .segment(Segment::new(TextureKind::Skin).label("Skin"))
+                    .segment(Segment::new(TextureKind::Cape).label("Cape"))
+                    .segment(Segment::new(TextureKind::Elytra).label("Elytra")),
+            ),
+        )
+        .child(
+            rect()
+                .horizontal()
+                .spacing(12.)
+                .child(import_button(
+                    library,
+                    selected,
+                    status,
+                    preview,
+                    busy,
+                    texture_kind,
+                )),
         )
         .child(section_label("ADD BY URL"))
         .child(
@@ -339,7 +389,7 @@ fn side_panel(
                 .spacing(12.)
                 .child(
                     TextInput::new(url_input)
-                        .placeholder("https://…/skin.png")
+                        .placeholder(format!("https://…/{}.png", kind.label()))
                         .width(Size::flex(1.0))
                         .enabled(!is_busy),
                 )
@@ -358,42 +408,49 @@ fn side_panel(
                                 add_url_status,
                                 preview,
                                 busy,
+                                kind,
                             );
                         })
                 }),
         )
-        .child(section_label("ADD BY PLAYER NAME"))
-        .child(
+        .maybe_child((kind == TextureKind::Skin).then(|| {
             rect()
-                .horizontal()
-                .content(Content::Flex)
-                .cross_align(Alignment::Center)
-                .spacing(12.)
+                .vertical()
+                .spacing(16.)
+                .child(section_label("ADD BY PLAYER NAME"))
                 .child(
-                    TextInput::new(name_input)
-                        .placeholder("e.g. Notch")
-                        .width(Size::flex(1.0))
-                        .enabled(!is_busy),
+                    rect()
+                        .horizontal()
+                        .content(Content::Flex)
+                        .cross_align(Alignment::Center)
+                        .spacing(12.)
+                        .child(
+                            TextInput::new(name_input)
+                                .placeholder("e.g. Notch")
+                                .width(Size::flex(1.0))
+                                .enabled(!is_busy),
+                        )
+                        .child({
+                            let add_name_status = status;
+                            Button::new()
+                                .variant(ButtonVariant::Primary)
+                                .disabled(is_busy)
+                                .text("SET")
+                                .on_press(move |_| {
+                                    let name = name_input.read().clone();
+                                    add_from_name(
+                                        name,
+                                        library,
+                                        selected,
+                                        add_name_status,
+                                        preview,
+                                        busy,
+                                    );
+                                })
+                        }),
                 )
-                .child({
-                    let add_name_status = status;
-                    Button::new()
-                        .variant(ButtonVariant::Primary)
-                        .disabled(is_busy)
-                        .text("SET")
-                        .on_press(move |_| {
-                            let name = name_input.read().clone();
-                            add_from_name(
-                                name,
-                                library,
-                                selected,
-                                add_name_status,
-                                preview,
-                                busy,
-                            );
-                        })
-                }),
-        )
+                .into_element()
+        }))
         .maybe_child(status.read().clone().map(|(text, is_error)| {
             label()
                 .text(text)
@@ -405,7 +462,10 @@ fn side_panel(
                 })
                 .into_element()
         }))
-        .child(section_label(format!("SKIN LIBRARY · {entry_count}")))
+        .child(section_label(format!(
+            "{} LIBRARY · {entry_count}",
+            capitalize(kind.label()).to_uppercase()
+        )))
         .child(grid)
         .child(
             rect()
@@ -415,7 +475,7 @@ fn side_panel(
                     Button::new()
                         .variant(ButtonVariant::Primary)
                         .disabled(!use_enabled)
-                        .text("Use this skin")
+                        .text(use_label)
                         .on_press(move |_| equip_selected(library, selected, status)),
                 )
                 .child(
@@ -427,6 +487,11 @@ fn side_panel(
                             let Some(id) = selected.read().clone() else {
                                 return;
                             };
+                            let texture = library
+                                .read()
+                                .entry(&id)
+                                .map(|entry| entry.texture)
+                                .unwrap_or_default();
                             library.write().remove(&id);
                             selected.set(None);
                             preview.set(
@@ -436,13 +501,16 @@ fn side_panel(
                                     .map(|(entry, bytes)| (bytes, entry.slim)),
                             );
                             invalidate_local_skin();
-                            status.set(Some(("Skin removed".to_string(), false)));
+                            status.set(Some((
+                                format!("{} removed", capitalize(texture.label())),
+                                false,
+                            )));
                         }),
                 ),
         )
         .child(
             label()
-                .text("The active skin installs CustomSkinLoader into your versions automatically when you launch. Custom skins apply to offline accounts on 1.8 – 26.3.")
+                .text("The equipped skin, cape and elytra install CustomSkinLoader into your versions automatically when you launch. They apply to offline accounts on 1.8 – 26.3.")
                 .font_size(12.)
                 .color(colors::fg_secondary()),
         )
@@ -455,7 +523,9 @@ fn import_button(
     mut status: State<Option<(String, bool)>>,
     mut preview: State<Option<(Bytes, bool)>>,
     mut busy: State<bool>,
+    texture_kind: State<TextureKind>,
 ) -> impl IntoElement {
+    let kind = *texture_kind.read();
     Button::new()
         .variant(ButtonVariant::Primary)
         .disabled(*busy.peek())
@@ -464,15 +534,15 @@ fn import_button(
                 .size(16.)
                 .color(colors::fg_primary()),
         )
-        .text("Import Skin")
+        .text(format!("Import {}", capitalize(kind.label())))
         .on_press(move |_| {
             spawn(async move {
                 busy.set(true);
                 status.set(Some(("Opening the file picker…".to_string(), false)));
 
                 let dialog = rfd::AsyncFileDialog::new()
-                    .set_title("Choose a skin PNG")
-                    .add_filter("Skin image", &["png"]);
+                    .set_title(format!("Choose a {} PNG", kind.label()))
+                    .add_filter("PNG image", &["png"]);
 
                 let Some(handle) = dialog.pick_file().await else {
                     tracing::warn!("skin file dialog closed without a selection");
@@ -486,13 +556,14 @@ fn import_button(
                 let file_name = handle.file_name();
                 let bytes = Bytes::from(handle.read().await);
 
-                match validate_skin(&bytes) {
+                match validate_texture(&bytes, kind) {
                     Ok(slim) => {
                         let entry_name = file_display_name(&file_name);
                         let added = library.write().add(
                             entry_name,
                             file_name,
                             SkinKind::File,
+                            kind,
                             slim,
                             &bytes,
                         );
@@ -501,9 +572,11 @@ fn import_button(
                                 library.write().set_active(Some(id.clone()));
                                 invalidate_local_skin();
                                 selected.set(Some(id));
-                                preview.set(Some((bytes, slim)));
+                                if kind == TextureKind::Skin {
+                                    preview.set(Some((bytes, slim)));
+                                }
                                 status.set(Some((
-                                    "Imported and set as your active skin".to_string(),
+                                    format!("Imported and set as your active {}", kind.label()),
                                     false,
                                 )));
                             }
@@ -526,7 +599,11 @@ fn select_skin(
 ) {
     selected.set(Some(id.clone()));
     match library.read().entry_bytes(&id) {
-        Some((entry, bytes)) => preview.set(Some((bytes, entry.slim))),
+        Some((entry, bytes)) if entry.texture == TextureKind::Skin => {
+            preview.set(Some((bytes, entry.slim)));
+        }
+        // Capes and elytras have no model preview, so the skin preview stays
+        Some(_) => {}
         None => preview.set(None),
     }
 }
@@ -538,9 +615,13 @@ fn add_from_url(
     mut status: State<Option<(String, bool)>>,
     mut preview: State<Option<(Bytes, bool)>>,
     mut busy: State<bool>,
+    kind: TextureKind,
 ) {
     if url.trim().is_empty() {
-        status.set(Some(("Paste a skin image URL first".to_string(), true)));
+        status.set(Some((
+            format!("Paste a {} image URL first", kind.label()),
+            true,
+        )));
         return;
     }
 
@@ -548,7 +629,7 @@ fn add_from_url(
         busy.set(true);
         status.set(None);
 
-        match fetch_url(&url).await {
+        match fetch_url(&url, kind).await {
             Ok((bytes, slim)) => {
                 let display = url
                     .trim()
@@ -557,12 +638,13 @@ fn add_from_url(
                     .next()
                     .map(file_display_name)
                     .filter(|name| !name.is_empty())
-                    .unwrap_or_else(|| "URL skin".to_string());
+                    .unwrap_or_else(|| format!("URL {}", kind.label()));
 
                 let added = library.write().add(
                     display,
                     url.trim().to_string(),
                     SkinKind::Url,
+                    kind,
                     slim,
                     &bytes,
                 );
@@ -571,9 +653,14 @@ fn add_from_url(
                         library.write().set_active(Some(id.clone()));
                         invalidate_local_skin();
                         selected.set(Some(id));
-                        preview.set(Some((bytes, slim)));
+                        if kind == TextureKind::Skin {
+                            preview.set(Some((bytes, slim)));
+                        }
                         status.set(Some((
-                            "Saved to your library and set as your active skin".to_string(),
+                            format!(
+                                "Saved to your library and set as your active {}",
+                                kind.label()
+                            ),
                             false,
                         )));
                     }
@@ -610,6 +697,7 @@ fn add_from_name(
                     canonical.clone(),
                     name.trim().to_string(),
                     SkinKind::Name,
+                    TextureKind::Skin,
                     slim,
                     &bytes,
                 );
@@ -695,4 +783,12 @@ fn truncate(name: &str, max: usize) -> String {
     }
     let cut: String = name.chars().take(max.saturating_sub(1)).collect();
     format!("{cut}…")
+}
+
+fn capitalize(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }

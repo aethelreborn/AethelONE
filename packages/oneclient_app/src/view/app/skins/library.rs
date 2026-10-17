@@ -14,6 +14,37 @@ pub enum SkinKind {
     Name,
 }
 
+/// Which of the three local textures an entry is. CustomSkinLoader reads them
+/// all from the LocalSkin folder, so the library manages them the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextureKind {
+    #[default]
+    Skin,
+    Cape,
+    Elytra,
+}
+
+impl TextureKind {
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Skin => "skin",
+            Self::Cape => "cape",
+            Self::Elytra => "elytra",
+        }
+    }
+
+    #[must_use]
+    pub fn subdir(self) -> &'static str {
+        match self {
+            Self::Skin => "skins",
+            Self::Cape => "capes",
+            Self::Elytra => "elytras",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SkinEntry {
     pub id: String,
@@ -21,12 +52,19 @@ pub struct SkinEntry {
     pub origin: String,
     pub kind: SkinKind,
     pub slim: bool,
+    /// Absent in libraries written before capes and elytras existed
+    #[serde(default)]
+    pub texture: TextureKind,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Library {
     pub skins: Vec<SkinEntry>,
     pub active: Option<String>,
+    #[serde(default)]
+    pub active_cape: Option<String>,
+    #[serde(default)]
+    pub active_elytra: Option<String>,
 }
 
 fn skins_dir() -> Result<PathBuf, String> {
@@ -65,6 +103,7 @@ impl Library {
         name: String,
         origin: String,
         kind: SkinKind,
+        texture: TextureKind,
         slim: bool,
         bytes: &[u8],
     ) -> Result<String, String> {
@@ -82,6 +121,7 @@ impl Library {
                 origin,
                 kind,
                 slim,
+                texture,
             },
         );
         self.save()?;
@@ -89,9 +129,13 @@ impl Library {
     }
 
     pub fn remove(&mut self, id: &str) {
+        let texture = self.entry(id).map(|entry| entry.texture);
         self.skins.retain(|entry| entry.id != id);
-        if self.active.as_deref() == Some(id) {
-            self.active = None;
+        if let Some(texture) = texture {
+            let slot = self.active_slot_mut(texture);
+            if slot.as_deref() == Some(id) {
+                *slot = None;
+            }
         }
         if let Ok(path) = entry_path(id) {
             let _ = std::fs::remove_file(path);
@@ -99,9 +143,46 @@ impl Library {
         let _ = self.save();
     }
 
+    /// Equips the entry in the slot that matches its texture kind.
     pub fn set_active(&mut self, id: Option<String>) {
-        self.active = id;
+        let texture = id
+            .as_deref()
+            .and_then(|id| self.entry(id))
+            .map(|entry| entry.texture)
+            .unwrap_or_default();
+        *self.active_slot_mut(texture) = id;
         let _ = self.save();
+    }
+
+    fn active_slot_mut(&mut self, texture: TextureKind) -> &mut Option<String> {
+        match texture {
+            TextureKind::Skin => &mut self.active,
+            TextureKind::Cape => &mut self.active_cape,
+            TextureKind::Elytra => &mut self.active_elytra,
+        }
+    }
+
+    fn active_slot(&self, texture: TextureKind) -> &Option<String> {
+        match texture {
+            TextureKind::Skin => &self.active,
+            TextureKind::Cape => &self.active_cape,
+            TextureKind::Elytra => &self.active_elytra,
+        }
+    }
+
+    #[must_use]
+    pub fn active_for(&self, texture: TextureKind) -> Option<&str> {
+        self.active_slot(texture).as_deref()
+    }
+
+    /// Every entry of one texture kind, newest first, for the library grid
+    #[must_use]
+    pub fn entries_for(&self, texture: TextureKind) -> Vec<SkinEntry> {
+        self.skins
+            .iter()
+            .filter(|entry| entry.texture == texture)
+            .cloned()
+            .collect()
     }
 
     /// Overrides the model guessed at import time when detection picked the
@@ -130,7 +211,11 @@ impl Library {
     }
 
     pub fn active_bytes(&self) -> Option<(SkinEntry, Bytes)> {
-        let id = self.active.as_deref()?;
+        self.active_bytes_for(TextureKind::Skin)
+    }
+
+    pub fn active_bytes_for(&self, texture: TextureKind) -> Option<(SkinEntry, Bytes)> {
+        let id = self.active_slot(texture).as_deref()?;
         self.entry_bytes(id)
     }
 }
@@ -160,10 +245,58 @@ pub fn validate_skin(bytes: &[u8]) -> Result<bool, String> {
     Ok(slim)
 }
 
-pub async fn fetch_url(raw: &str) -> Result<(Bytes, bool), String> {
+/// Capes are 64x32 on modern versions; 22x17 files from the very old days are
+/// still worn by some accounts, so they are accepted too.
+pub fn validate_cape(bytes: &[u8]) -> Result<(), String> {
+    validate_dimensions(bytes, &[(64, 32), (22, 17)], "Capes")
+}
+
+/// Elytras share the cape layout and have no legacy size.
+pub fn validate_elytra(bytes: &[u8]) -> Result<(), String> {
+    validate_dimensions(bytes, &[(64, 32)], "Elytras")
+}
+
+/// The one validation the UI routes every import through; the bool is the
+/// slim-arm guess and only means anything for skins.
+pub fn validate_texture(bytes: &[u8], texture: TextureKind) -> Result<bool, String> {
+    match texture {
+        TextureKind::Skin => validate_skin(bytes),
+        TextureKind::Cape => validate_cape(bytes).map(|()| false),
+        TextureKind::Elytra => validate_elytra(bytes).map(|()| false),
+    }
+}
+
+fn validate_dimensions(bytes: &[u8], allowed: &[(u32, u32)], what: &str) -> Result<(), String> {
+    const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
+    if !bytes.starts_with(PNG_MAGIC) {
+        return Err("Only PNG files are supported".to_string());
+    }
+
+    let image = image::load_from_memory(bytes)
+        .map_err(|_| "That file is not a readable PNG image".to_string())?;
+    use image::GenericImageView as _;
+    let (width, height) = image.dimensions();
+
+    if !allowed.contains(&(width, height)) {
+        let sizes = allowed
+            .iter()
+            .map(|(w, h)| format!("{w}x{h}"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        return Err(format!(
+            "{what} must be {sizes} pixels, this image is {width}x{height}"
+        ));
+    }
+    Ok(())
+}
+
+pub async fn fetch_url(raw: &str, texture: TextureKind) -> Result<(Bytes, bool), String> {
     let url = raw.trim();
     if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return Err("Enter an http(s) link to a skin PNG".to_string());
+        return Err(format!(
+            "Enter an http(s) link to a {} PNG",
+            texture.label()
+        ));
     }
 
     let client = reqwest::Client::builder()
@@ -193,7 +326,7 @@ pub async fn fetch_url(raw: &str) -> Result<(Bytes, bool), String> {
         return Err("That file is too large to be a skin".to_string());
     }
 
-    let slim = validate_skin(&bytes)?;
+    let slim = validate_texture(&bytes, texture)?;
     Ok((bytes, slim))
 }
 
@@ -383,5 +516,117 @@ mod tests {
         assert_eq!(file_display_name("archive.tar.gz"), "archive.tar");
         assert_eq!(file_display_name("skin"), "skin");
         assert_eq!(file_display_name(""), "Imported skin");
+    }
+
+    #[test]
+    fn libraries_written_before_capes_still_load() {
+        let raw = r#"{
+            "skins": [
+                {"id":"a","name":"Old","origin":"old.png","kind":"file","slim":false}
+            ],
+            "active": "a"
+        }"#;
+        let library: Library = serde_json::from_str(raw).expect("legacy library must parse");
+        assert_eq!(library.skins[0].texture, TextureKind::Skin);
+        assert_eq!(library.active.as_deref(), Some("a"));
+        assert_eq!(library.active_cape, None);
+        assert_eq!(library.active_elytra, None);
+    }
+
+    #[test]
+    fn equip_and_remove_route_through_the_entries_texture_kind() {
+        let mut library = Library::default();
+        library.skins.push(SkinEntry {
+            id: "c1".into(),
+            name: "Cape".into(),
+            origin: "cape.png".into(),
+            kind: SkinKind::File,
+            slim: false,
+            texture: TextureKind::Cape,
+        });
+        library.skins.push(SkinEntry {
+            id: "s1".into(),
+            name: "Skin".into(),
+            origin: "skin.png".into(),
+            kind: SkinKind::File,
+            slim: true,
+            texture: TextureKind::Skin,
+        });
+
+        library.set_active(Some("c1".into()));
+        assert_eq!(library.active_cape.as_deref(), Some("c1"));
+        assert_eq!(library.active, None, "a cape must not take the skin slot");
+
+        library.set_active(Some("s1".into()));
+        assert_eq!(library.active.as_deref(), Some("s1"));
+        assert_eq!(library.active_cape.as_deref(), Some("c1"));
+
+        library.remove("c1");
+        assert_eq!(library.active_cape, None, "removing the cape un-equips it");
+        assert_eq!(library.active.as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn entries_are_grouped_by_texture_kind() {
+        let mut library = Library::default();
+        for (id, texture) in [
+            ("s1", TextureKind::Skin),
+            ("c1", TextureKind::Cape),
+            ("e1", TextureKind::Elytra),
+        ] {
+            library.skins.push(SkinEntry {
+                id: id.into(),
+                name: id.into(),
+                origin: id.into(),
+                kind: SkinKind::File,
+                slim: false,
+                texture,
+            });
+        }
+
+        let capes = library.entries_for(TextureKind::Cape);
+        assert_eq!(capes.len(), 1);
+        assert_eq!(capes[0].id, "c1");
+        assert_eq!(library.entries_for(TextureKind::Skin).len(), 1);
+    }
+
+    #[test]
+    fn cape_validation_accepts_modern_and_legacy_sizes() {
+        assert_eq!(validate_cape(&png(64, 32, false)), Ok(()));
+        let legacy = {
+            let mut img = image::RgbaImage::from_pixel(22, 17, image::Rgba([0, 0, 255, 255]));
+            let mut buf = Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgba8(img)
+                .write_to(&mut buf, image::ImageFormat::Png)
+                .expect("png encoding must work");
+            buf.into_inner()
+        };
+        assert_eq!(validate_cape(&legacy), Ok(()));
+
+        assert!(validate_cape(&png(64, 64, false)).is_err());
+        assert!(validate_cape(b"not a png").is_err());
+    }
+
+    #[test]
+    fn elytra_validation_only_accepts_the_cape_layout() {
+        assert_eq!(validate_elytra(&png(64, 32, false)), Ok(()));
+        assert!(validate_elytra(&png(64, 64, false)).is_err());
+    }
+
+    #[test]
+    fn texture_validation_reports_slim_only_for_skins() {
+        assert_eq!(
+            validate_texture(&png(64, 64, true), TextureKind::Skin),
+            Ok(true)
+        );
+        assert_eq!(
+            validate_texture(&png(64, 32, false), TextureKind::Cape),
+            Ok(false)
+        );
+        assert_eq!(
+            validate_texture(&png(64, 32, false), TextureKind::Elytra),
+            Ok(false)
+        );
+        assert!(validate_texture(&png(64, 64, false), TextureKind::Cape).is_err());
     }
 }

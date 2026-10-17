@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use bytes::Bytes;
 use oneclient_cluster::Cluster;
 use serde_json::Value;
 
-use super::library::Library;
+use super::library::{Library, SkinEntry, TextureKind};
 
 const CSL_API: &str = "https://api.modrinth.com/v2/project/customskinloader/version";
 // Modrinth lags behind upstream releases (15.1 fixing the startup NPE is
@@ -44,19 +45,21 @@ async fn sync_inner(
     let mods_dir = oneclient_common::paths::cluster_mods_dir(&cluster.folder_name)
         .map_err(|err| err.to_string())?;
 
-    let Some((entry, skin)) = library.active_bytes() else {
+    let skin = library.active_bytes_for(TextureKind::Skin);
+    let cape = library.active_bytes_for(TextureKind::Cape);
+    let elytra = library.active_bytes_for(TextureKind::Elytra);
+    if skin.is_none() && cape.is_none() && elytra.is_none() {
         remove_csl_jars(&mods_dir)?;
         return Ok(());
-    };
+    }
 
-    // CustomSkinLoader's local skin is only written for offline accounts; a
-    // premium account keeps the skin Mojang serves. Bail before doing any
+    // CustomSkinLoader's local textures are only written for offline accounts;
+    // a premium account keeps the skin Mojang serves. Bail before doing any
     // network or disk work rather than installing a jar that would do nothing.
     if !account.is_offline() {
         tracing::info!(
             username = %account.username,
-            skin = %entry.name,
-            "active skin is only applied to offline accounts; skipping customskinloader"
+            "active local textures are only applied to offline accounts; skipping customskinloader"
         );
         remove_csl_jars(&mods_dir)?;
         return Ok(());
@@ -74,32 +77,46 @@ async fn sync_inner(
             remove_csl_jars(&mods_dir)?;
             return Ok(());
         }
-        Err(err) => return offline_fallback(&mods_dir, &cluster, account, &skin, &err),
+        Err(err) => {
+            return offline_fallback(&mods_dir, &cluster, account, &skin, &cape, &elytra, &err);
+        }
     };
 
     let cached = match fetch_jar(&build).await {
         Ok(path) => path,
-        Err(err) => return offline_fallback(&mods_dir, &cluster, account, &skin, &err),
+        Err(err) => {
+            return offline_fallback(&mods_dir, &cluster, account, &skin, &cape, &elytra, &err);
+        }
     };
     install_jar(&cached, &build.filename, &mods_dir)?;
-    write_skin(&cluster, account, &skin)?;
+    sync_local_textures(
+        &cluster.game_dir().map_err(|err| err.to_string())?,
+        &account.username,
+        skin.as_ref().map(|(_, bytes)| bytes.as_ref()),
+        cape.as_ref().map(|(_, bytes)| bytes.as_ref()),
+        elytra.as_ref().map(|(_, bytes)| bytes.as_ref()),
+    )?;
     tracing::info!(
-        skin = %entry.name,
+        skin = skin.as_ref().map(|(entry, _)| entry.name.as_str()),
+        cape = cape.as_ref().map(|(entry, _)| entry.name.as_str()),
+        elytra = elytra.as_ref().map(|(entry, _)| entry.name.as_str()),
         mc_version = %cluster.mc_version,
         jar = %build.filename,
-        "active skin synced for launch"
+        "active local textures synced for launch"
     );
     Ok(())
 }
 
 /// The Modrinth check failed (offline, transient error) or the download broke:
-/// a jar from an earlier launch still delivers the active skin, so only skip
-/// when there is nothing installed to fall back on.
+/// a jar from an earlier launch still delivers the active textures, so only
+/// skip when there is nothing installed to fall back on.
 fn offline_fallback(
     mods_dir: &Path,
     cluster: &Cluster,
     account: &oneclient_auth::MinecraftAccount,
-    skin: &[u8],
+    skin: &Option<(SkinEntry, Bytes)>,
+    cape: &Option<(SkinEntry, Bytes)>,
+    elytra: &Option<(SkinEntry, Bytes)>,
     reason: &str,
 ) -> Result<(), String> {
     if has_csl_jar(mods_dir) {
@@ -107,37 +124,65 @@ fn offline_fallback(
             %reason,
             "customskinloader availability check failed, reusing the installed jar"
         );
-        write_skin(cluster, account, skin)
+        sync_local_textures(
+            &cluster.game_dir().map_err(|err| err.to_string())?,
+            &account.username,
+            skin.as_ref().map(|(_, bytes)| bytes.as_ref()),
+            cape.as_ref().map(|(_, bytes)| bytes.as_ref()),
+            elytra.as_ref().map(|(_, bytes)| bytes.as_ref()),
+        )
     } else {
-        tracing::warn!(%reason, "customskinloader unavailable, skipping skin sync");
+        tracing::warn!(%reason, "customskinloader unavailable, skipping texture sync");
         Ok(())
     }
 }
 
-fn write_skin(
-    cluster: &Cluster,
-    account: &oneclient_auth::MinecraftAccount,
-    skin: &[u8],
+/// Writes the equipped textures into CustomSkinLoader's LocalSkin folder and
+/// removes the files of the ones that are no longer equipped, so unequipping
+/// does not leave a stale texture behind. The game directory has to be given
+/// as `base`; CustomSkinLoader resolves its files relative to it.
+fn sync_local_textures(
+    base: &Path,
+    username: &str,
+    skin: Option<&[u8]>,
+    cape: Option<&[u8]>,
+    elytra: Option<&[u8]>,
 ) -> Result<(), String> {
-    debug_assert!(
-        account.is_offline(),
-        "callers must check is_offline() before writing a local skin"
-    );
-    let game_dir = cluster.game_dir().map_err(|err| err.to_string())?;
-    let dir = game_dir
+    write_local_texture(base, username, TextureKind::Skin, skin)?;
+    write_local_texture(base, username, TextureKind::Cape, cape)?;
+    write_local_texture(base, username, TextureKind::Elytra, elytra)?;
+    Ok(())
+}
+
+fn write_local_texture(
+    base: &Path,
+    username: &str,
+    texture: TextureKind,
+    bytes: Option<&[u8]>,
+) -> Result<(), String> {
+    let dir = base
         .join("CustomSkinLoader")
         .join("LocalSkin")
-        .join("skins");
+        .join(texture.subdir());
+    // CustomSkinLoader resolves its local files as "LocalSkin/{subdir}/{USERNAME}.png"
+    let file_name = skin_file_name(username);
+    let Some(bytes) = bytes else {
+        let stale = dir.join(file_name);
+        if stale.is_file() {
+            let _ = std::fs::remove_file(stale);
+        }
+        return Ok(());
+    };
     std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-    // CustomSkinLoader resolves its local skin as "LocalSkin/skins/{USERNAME}.png"
-    let file_name = skin_file_name(&account.username);
-    // Releases before the extension fix wrote the bare username; that file is
-    // never read, so drop it
-    let legacy = dir.join(sanitize_username(&account.username));
-    if legacy.is_file() {
-        let _ = std::fs::remove_file(legacy);
+    if texture == TextureKind::Skin {
+        // Releases before the extension fix wrote the bare username; that file
+        // is never read, so drop it
+        let legacy = dir.join(sanitize_username(username));
+        if legacy.is_file() {
+            let _ = std::fs::remove_file(legacy);
+        }
     }
-    std::fs::write(dir.join(file_name), skin).map_err(|err| err.to_string())
+    std::fs::write(dir.join(file_name), bytes).map_err(|err| err.to_string())
 }
 
 fn skin_file_name(username: &str) -> String {
@@ -400,7 +445,7 @@ mod tests {
 
     use super::{
         has_csl_jar, install_jar, pick_github_build, pick_modrinth_build, remove_csl_jars_except,
-        sanitize_username, skin_file_name, version_matches,
+        sanitize_username, skin_file_name, sync_local_textures, version_matches,
     };
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -640,5 +685,80 @@ mod tests {
         std::fs::write(mods.join("CustomSkinLoader_Universal-15.1.jar"), b"x").unwrap();
         assert!(has_csl_jar(&mods));
         assert!(!has_csl_jar(&mods.join("does-not-exist")));
+    }
+
+    #[test]
+    fn sync_local_textures_writes_every_equipped_texture() {
+        let game = temp_dir("textures-all");
+        sync_local_textures(
+            &game,
+            "Darkie_Krish",
+            Some(b"skin-bytes"),
+            Some(b"cape-bytes"),
+            Some(b"elytra-bytes"),
+        )
+        .unwrap();
+
+        let local = game.join("CustomSkinLoader").join("LocalSkin");
+        assert_eq!(
+            std::fs::read(local.join("skins/Darkie_Krish.png")).unwrap(),
+            b"skin-bytes".to_vec()
+        );
+        assert_eq!(
+            std::fs::read(local.join("capes/Darkie_Krish.png")).unwrap(),
+            b"cape-bytes".to_vec()
+        );
+        assert_eq!(
+            std::fs::read(local.join("elytras/Darkie_Krish.png")).unwrap(),
+            b"elytra-bytes".to_vec()
+        );
+    }
+
+    #[test]
+    fn unequipped_textures_are_removed_but_the_rest_stays() {
+        let game = temp_dir("textures-unequip");
+        sync_local_textures(
+            &game,
+            "Krish",
+            Some(b"skin"),
+            Some(b"cape"),
+            Some(b"elytra"),
+        )
+        .unwrap();
+
+        sync_local_textures(&game, "Krish", Some(b"skin"), None, None).unwrap();
+
+        let local = game.join("CustomSkinLoader").join("LocalSkin");
+        assert!(local.join("skins/Krish.png").exists());
+        assert!(!local.join("capes/Krish.png").exists());
+        assert!(!local.join("elytras/Krish.png").exists());
+    }
+
+    #[test]
+    fn syncing_with_no_textures_leaves_nothing_behind() {
+        let game = temp_dir("textures-none");
+        sync_local_textures(&game, "Krish", Some(b"skin"), Some(b"cape"), None).unwrap();
+
+        sync_local_textures(&game, "Krish", None, None, None).unwrap();
+
+        let local = game.join("CustomSkinLoader").join("LocalSkin");
+        assert!(!local.join("skins/Krish.png").exists());
+        assert!(!local.join("capes/Krish.png").exists());
+    }
+
+    #[test]
+    fn the_legacy_bare_username_file_is_dropped_for_skins() {
+        let game = temp_dir("textures-legacy");
+        let skins = game
+            .join("CustomSkinLoader")
+            .join("LocalSkin")
+            .join("skins");
+        std::fs::create_dir_all(&skins).unwrap();
+        std::fs::write(skins.join("Krish"), b"legacy").unwrap();
+
+        sync_local_textures(&game, "Krish", Some(b"skin"), None, None).unwrap();
+
+        assert!(!skins.join("Krish").exists());
+        assert!(skins.join("Krish.png").exists());
     }
 }
