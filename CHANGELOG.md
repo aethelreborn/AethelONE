@@ -1,3 +1,9 @@
+## 2.17.0 (2026-10-17)
+
+### Features
+
+- Local capes and elytras now also apply to premium accounts: CustomSkinLoader keeps the skin and cape Mojang serves for a signed-in account, and a local cape or elytra fills in when the account has none of its own. CustomSkinLoader is now installed for premium accounts too, but only when a cape or elytra is equipped.
+
 ## 2.16.1 (2026-10-17)
 
 ### Fixes
