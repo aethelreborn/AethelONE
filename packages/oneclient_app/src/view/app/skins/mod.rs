@@ -74,14 +74,7 @@ impl Component for AccountSkins {
 
         let slim_now = *model_slim.read();
         use_side_effect_with_deps(&slim_now, move |slim| {
-            apply_model_slim(
-                library,
-                selected,
-                preview,
-                status,
-                selected.read().clone(),
-                *slim,
-            );
+            apply_model_slim(library, preview, status, selected.read().clone(), *slim);
         });
 
         rect()
@@ -244,7 +237,6 @@ fn invalidate_local_skin() {
 /// preview (and anything else wearing the skin) on the new model
 fn apply_model_slim(
     mut library: State<Library>,
-    selected: State<Option<String>>,
     mut preview: State<Option<(Bytes, bool)>>,
     mut status: State<Option<(String, bool)>>,
     id: Option<String>,
