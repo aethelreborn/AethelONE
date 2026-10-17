@@ -1,3 +1,9 @@
+## 2.16.1 (2026-10-17)
+
+### Fixes
+
+- Fixed sort by not applying to OneClient versions in the instance list by [LynithDev](https://github.com/LynithDev)
+
 ## 2.16.0 (2026-10-17)
 
 ### Features
