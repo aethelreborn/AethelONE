@@ -6,7 +6,7 @@ use freya::prelude::*;
 use oneclient_content::packages::ContentType;
 use oneclient_content::packages::health::HealthIssue;
 
-use crate::components::{Button, OverlayPopup};
+use crate::components::{Button, Icon, IconType, OverlayPopup};
 use crate::hooks::{
     bundle_overrides_map, bundles_with_status_items, cluster_content_items, package_updates,
     stale_hashes, use_bundle_overrides, use_bundles_with_status, use_cluster_content,
