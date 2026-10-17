@@ -955,6 +955,7 @@ impl Component for WorldSnapshotsModal {
         let snapshot_now = {
             let dispatch = dispatch.clone();
             let world = self.world.clone();
+            let cluster_id = self.cluster_id;
             Button::new()
                 .secondary()
                 .on_press(move |_| {
