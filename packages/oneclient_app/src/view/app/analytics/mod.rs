@@ -8,10 +8,12 @@ use crate::theme::colors;
 use crate::ui::{border_all_color, columns_for};
 
 mod charts;
+mod heatmap;
 mod servers;
 mod tiles;
 
 use charts::{DailyChart, PlaytimeChart, distribution_card};
+use heatmap::PlaytimeHeatmap;
 use servers::servers_section;
 use tiles::{personas_row, tiles_row};
 
@@ -32,6 +34,7 @@ fn analytics_body_inner(analytics: &Analytics, force_all: bool) -> Element {
     }
 
     root = root.child(DailyChart::new(stats.daily.clone()));
+    root = root.child(PlaytimeHeatmap::new(stats.daily.clone()));
 
     let mut charts: Vec<Element> = vec![PlaytimeChart::from_stats(stats).into_element()];
     if let Some(dist) = distribution_card(&stats.session_secs, force_all) {
