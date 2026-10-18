@@ -41,6 +41,30 @@ pub async fn mark_server_joined(db: &DbPool, id: i64, at: &str) -> LauncherResul
     Ok(server_dao::mark_joined(db, id, at).await?)
 }
 
+/// Normalises an address pair into `(host, port)` so saved servers and
+/// session-history rows can be compared: lowercase, no FQDN root dot, and a
+/// missing port means the default one
+pub fn host_port(address: &str, port: Option<i64>) -> Option<(String, u16)> {
+    let (host, parsed_port) = parse_address(address).ok()?;
+    let port = match port {
+        Some(port) if (0..=u16::MAX as i64).contains(&port) => port as u16,
+        _ => parsed_port,
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+    Some((host, port))
+}
+
+/// Whether a saved server and a session-history row describe the same server
+pub fn matches_saved(saved: &str, address: &str, port: Option<i64>) -> bool {
+    match (host_port(saved, None), host_port(address, port)) {
+        (Some(saved), Some(other)) => saved == other,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use sqlx::SqlitePool;
@@ -88,6 +112,35 @@ mod tests {
             .unwrap();
         assert_eq!(custom.address, "play.example.com:25570");
         assert_eq!(list_saved_servers(&pool).await.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn host_and_session_rows_match_despite_spelling() {
+        assert!(matches_saved("Play.Example.com", "play.example.com", None));
+        assert!(matches_saved(
+            "play.example.com",
+            "PLAY.example.com.",
+            Some(25565)
+        ));
+        assert!(matches_saved(
+            "play.example.com:25570",
+            "play.example.com",
+            Some(25570)
+        ));
+        assert!(matches_saved("play.example.com", "play.example.com", None));
+
+        assert!(!matches_saved(
+            "play.example.com",
+            "play.example.com",
+            Some(25570)
+        ));
+        assert!(!matches_saved(
+            "play.example.com",
+            "other.example.com",
+            None
+        ));
+        assert!(!matches_saved("", "play.example.com", None));
+        assert!(!matches_saved("play.example.com", "", None));
     }
 
     #[tokio::test]

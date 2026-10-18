@@ -1,17 +1,19 @@
 use freya::prelude::*;
 use oneclient_common::supports_quick_play;
 use oneclient_core::clusters::Cluster;
-use oneclient_core::servers::SavedServerRow;
+use oneclient_core::game::ServerStat;
+use oneclient_core::servers::{SavedServerRow, matches_saved};
 
 use crate::components::{Button, Dropdown, Icon, IconType, ScrollArea, TextInput};
 use crate::hooks::{
     add_saved_server, invalidate_saved_servers, mark_server_joined, query_is_loading,
-    remove_saved_server, settled_or_loading, try_saved_servers, try_server_ping,
-    use_active_cluster_id, use_clusters, use_dispatch, use_saved_servers, use_server_ping,
+    remove_saved_server, settled_or_loading, try_global_analytics, try_saved_servers,
+    try_server_ping, use_active_cluster_id, use_clusters, use_dispatch, use_global_analytics,
+    use_saved_servers, use_server_ping,
 };
 use crate::theme::colors;
 use crate::ui::{border_all_color, centered_note};
-use crate::utils::default_cluster;
+use crate::utils::{default_cluster, format_duration, format_time_ago};
 
 #[derive(PartialEq)]
 pub struct Servers;
@@ -23,6 +25,10 @@ impl Component for Servers {
         let loading = query_is_loading(&query);
         let clusters = use_clusters();
         let cluster_list: Vec<Cluster> = settled_or_loading(&clusters).unwrap_or_default();
+        let analytics = try_global_analytics(&use_global_analytics());
+        let stats: Vec<ServerStat> = analytics
+            .map(|analytics| analytics.servers)
+            .unwrap_or_default();
         let dispatch = use_dispatch();
 
         let mut address = use_state(String::new);
@@ -66,9 +72,16 @@ impl Component for Servers {
                     servers
                         .iter()
                         .map(|server| {
+                            let stat = stats
+                                .iter()
+                                .find(|stat| {
+                                    matches_saved(&server.address, &stat.address, stat.port)
+                                })
+                                .cloned();
                             ServerRow {
                                 server: server.clone(),
                                 clusters: cluster_list.clone(),
+                                stat,
                             }
                             .into_element()
                         })
@@ -176,6 +189,7 @@ fn header(
 struct ServerRow {
     server: SavedServerRow,
     clusters: Vec<Cluster>,
+    stat: Option<ServerStat>,
 }
 
 impl Component for ServerRow {
@@ -185,13 +199,23 @@ impl Component for ServerRow {
         let checking = status.is_none();
         let dispatch = use_dispatch();
 
-        let default_index = default_cluster(self.clusters.clone(), *use_active_cluster_id().read())
-            .and_then(|cluster| {
-                self.clusters
-                    .iter()
-                    .position(|candidate| candidate.id == cluster.id)
-            })
-            .unwrap_or(0);
+        let default_index =
+            self.stat
+                .as_ref()
+                .and_then(|stat| {
+                    self.clusters
+                        .iter()
+                        .position(|candidate| candidate.id == stat.last_cluster_id)
+                })
+                .or_else(|| {
+                    default_cluster(self.clusters.clone(), *use_active_cluster_id().read())
+                        .and_then(|cluster| {
+                            self.clusters
+                                .iter()
+                                .position(|candidate| candidate.id == cluster.id)
+                        })
+                })
+                .unwrap_or(0);
         let selected = use_state(move || default_index);
 
         let dot = match &status {
@@ -218,6 +242,21 @@ impl Component for ServerRow {
             .clone()
             .unwrap_or_else(|| self.server.address.clone());
         let show_address = self.server.label.is_some();
+
+        let history = self.stat.as_ref().map(|stat| {
+            let mut parts = vec![if stat.joins == 1 {
+                "1 visit".to_string()
+            } else {
+                format!("{} visits", stat.joins)
+            }];
+            if stat.total_secs > 0 {
+                parts.push(format_duration(stat.total_secs));
+            }
+            if let Some(ago) = stat.last_played.as_deref().and_then(format_time_ago) {
+                parts.push(format!("last played {ago}"));
+            }
+            parts.join(" · ")
+        });
 
         let cluster_names: Vec<String> = self
             .clusters
@@ -286,7 +325,14 @@ impl Component for ServerRow {
                         } else {
                             colors::fg_secondary()
                         },
-                    )),
+                    ))
+                    .maybe_child(history.as_ref().map(|text| {
+                        label()
+                            .text(text.clone())
+                            .font_size(11.)
+                            .color(colors::fg_secondary().with_a(170))
+                            .into_element()
+                    })),
             )
             .maybe_child(has_clusters.then(|| {
                 Dropdown::new(selected_label, cluster_names)

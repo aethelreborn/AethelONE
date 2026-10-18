@@ -321,6 +321,25 @@ pub fn parse_day(date: &str) -> Option<NaiveDate> {
 }
 
 /// `2026-07-05` -> `Jul 5`
+/// Short human phrasing for a past RFC 3339 timestamp, `None` when the
+/// timestamp does not parse
+pub fn format_time_ago(rfc3339: &str) -> Option<String> {
+    let then = chrono::DateTime::parse_from_rfc3339(rfc3339).ok()?;
+    let secs = (chrono::Local::now() - then.with_timezone(&chrono::Local))
+        .num_seconds()
+        .max(0);
+
+    Some(match secs {
+        s if s < 60 => "just now".to_string(),
+        s if s < 3600 => format!("{}m ago", s / 60),
+        s if s < 86_400 => format!("{}h ago", s / 3600),
+        s if s < 172_800 => "yesterday".to_string(),
+        s if s < 2_592_000 => format!("{}d ago", s / 86_400),
+        s if s < 31_536_000 => format!("{}mo ago", s / 2_592_000),
+        s => format!("{}y ago", s / 31_536_000),
+    })
+}
+
 pub fn format_day(date: NaiveDate) -> String {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -589,6 +608,19 @@ mod tests {
     fn memory_labels_drop_the_decimal_when_whole() {
         assert_eq!(format_memory_gb(8192), "8 GB");
         assert_eq!(format_memory_gb(1536), "1.5 GB");
+    }
+
+    #[test]
+    fn time_ago_phrases_past_timestamps() {
+        let now = chrono::Local::now();
+        let ago = |secs: i64| (now - chrono::Duration::seconds(secs)).to_rfc3339();
+
+        assert_eq!(format_time_ago(&ago(5)).as_deref(), Some("just now"));
+        assert_eq!(format_time_ago(&ago(120)).as_deref(), Some("2m ago"));
+        assert_eq!(format_time_ago(&ago(7_200)).as_deref(), Some("2h ago"));
+        assert_eq!(format_time_ago(&ago(90_000)).as_deref(), Some("yesterday"));
+        assert_eq!(format_time_ago(&ago(259_200)).as_deref(), Some("3d ago"));
+        assert_eq!(format_time_ago("not a date"), None);
     }
 
     #[test]
