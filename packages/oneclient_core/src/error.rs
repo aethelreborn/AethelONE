@@ -63,6 +63,9 @@ pub enum LauncherError {
     GameError(#[from] crate::game::GameError),
 
     #[error(transparent)]
+    PingError(#[from] oneclient_net::slp::PingError),
+
+    #[error(transparent)]
     LogsError(#[from] oneclient_cluster::logs::LogsError),
 
     #[error(transparent)]

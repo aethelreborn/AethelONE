@@ -15,6 +15,7 @@ pub mod migration;
 pub mod recovery;
 pub mod relocate;
 pub mod reporting;
+pub mod servers;
 pub mod settings;
 pub mod simulate;
 mod state;

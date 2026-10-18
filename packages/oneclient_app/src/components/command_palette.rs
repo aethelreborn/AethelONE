@@ -61,6 +61,12 @@ fn static_commands() -> Vec<Command> {
             Route::Stats {},
         ),
         Command::new(
+            "Servers",
+            "saved servers",
+            IconType::Globe01,
+            Route::Servers {},
+        ),
+        Command::new(
             "Debug",
             "developer options",
             IconType::Terminal,

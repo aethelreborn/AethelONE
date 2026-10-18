@@ -8,6 +8,7 @@ mod request;
 mod response;
 mod service;
 
+pub mod slp;
 pub mod status;
 
 pub use cache::{EtagPolicy, Fetched, commit_etag, fetch_cached};
@@ -19,3 +20,4 @@ pub use rate_limit::{DownloadLimiter, throttle};
 pub use request::*;
 pub use response::*;
 pub use service::RequestClient;
+pub use slp::{DEFAULT_PORT, PingError, ServerStatus, parse_address, ping_server};

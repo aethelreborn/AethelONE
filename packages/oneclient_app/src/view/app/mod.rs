@@ -2,6 +2,7 @@ mod analytics;
 mod clusters;
 mod debug;
 mod home;
+mod servers;
 pub mod skins;
 mod stats;
 
@@ -70,5 +71,6 @@ pub(crate) use analytics::{analytics_body, analytics_placeholder};
 pub use clusters::Clusters;
 pub use debug::Debug;
 pub use home::Home;
+pub use servers::Servers;
 pub use skins::AccountSkins;
 pub use stats::Stats;

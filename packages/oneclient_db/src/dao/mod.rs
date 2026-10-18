@@ -9,4 +9,5 @@ pub mod game_session;
 pub mod java;
 pub mod package_metadata;
 pub mod release_migration_waitlist;
+pub mod saved_server;
 pub mod setting_profile;

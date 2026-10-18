@@ -148,6 +148,11 @@ fn navbar_center(is_small: bool) -> impl IntoElement {
             nav_label: "Browse",
         })
         .child(NavLink {
+            active: route == Route::Servers {},
+            target: NavTarget::Route(Route::Servers {}),
+            nav_label: "Servers",
+        })
+        .child(NavLink {
             active: route == Route::AccountSkins {},
             target: NavTarget::Route(Route::AccountSkins {}),
             nav_label: "Skins",

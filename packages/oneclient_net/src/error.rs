@@ -65,9 +65,7 @@ pub enum RequestError {
 
     /// A zero-byte payload is never a valid mod, resource pack or runtime
     #[error("{source_desc} downloaded empty - the server sent no data")]
-    EmptyDownload {
-        source_desc: String,
-    },
+    EmptyDownload { source_desc: String },
 
     #[error(
         "AethelONE did not contact {url} because the Terms of Service and Privacy Policy were \
