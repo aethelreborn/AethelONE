@@ -32,7 +32,7 @@ impl Component for ClusterOverview {
             Some(a) if a.playtime.session_count == 0 => analytics_placeholder(
                 "No sessions recorded for this cluster yet. Launch it and come back!",
             ),
-            Some(a) => analytics_body(a),
+            Some(a) => analytics_body(a, Some(cluster_id)),
         };
 
         cluster_content()

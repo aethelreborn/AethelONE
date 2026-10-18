@@ -419,6 +419,64 @@ impl Analytics {
     }
 }
 
+/// One finished game session with the instance that ran it, ready for the
+/// recent-sessions timeline
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlaySession {
+    pub cluster_id: i64,
+    pub cluster_name: String,
+    pub started_at: String,
+    pub ended_at: String,
+    pub secs: i64,
+}
+
+/// Finished sessions, newest first; rows with unparseable or non-positive
+/// durations are dropped rather than shown as zero-length bars
+pub async fn recent_sessions(
+    db: &oneclient_db::DbPool,
+    cluster_id: Option<i64>,
+    limit: i64,
+) -> LauncherResult<Vec<PlaySession>> {
+    let rows = session_dao::recent_sessions(db, cluster_id, limit).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let ended = row.ended_at?;
+            let (Ok(start), Ok(end)) = (
+                DateTime::parse_from_rfc3339(&row.started_at),
+                DateTime::parse_from_rfc3339(&ended),
+            ) else {
+                return None;
+            };
+            let secs = (end - start).num_seconds();
+            (secs > 0).then_some(PlaySession {
+                cluster_id: row.cluster_id,
+                cluster_name: row.cluster_name,
+                started_at: row.started_at,
+                ended_at: ended,
+                secs,
+            })
+        })
+        .collect())
+}
+
+/// Buckets `sessions` (already newest first) into `(day key, sessions)` pairs
+/// using each timestamp's own offset, the same clock the DAO stores
+pub fn group_sessions_by_day(sessions: &[PlaySession]) -> Vec<(String, Vec<&PlaySession>)> {
+    let mut groups: Vec<(String, Vec<&PlaySession>)> = Vec::new();
+    for session in sessions {
+        let Some(start) = DateTime::parse_from_rfc3339(&session.started_at).ok() else {
+            continue;
+        };
+        let key = start.date_naive().format("%Y-%m-%d").to_string();
+        match groups.last_mut() {
+            Some((day, list)) if *day == key => list.push(session),
+            _ => groups.push((key, vec![session])),
+        }
+    }
+    groups
+}
+
 #[tracing::instrument(level = "debug", skip(db))]
 pub async fn global_analytics(db: &oneclient_db::DbPool) -> LauncherResult<Analytics> {
     let spans = session_dao::all_session_spans(db).await?;
@@ -698,5 +756,68 @@ mod tests {
             .collect();
 
         assert_eq!(personas_for(&stats, &servers).len(), MAX_PERSONAS);
+    }
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    fn play(start: &str, end: &str, name: &str) -> PlaySession {
+        let (Ok(s), Ok(e)) = (
+            DateTime::parse_from_rfc3339(start),
+            DateTime::parse_from_rfc3339(end),
+        ) else {
+            panic!("bad fixture");
+        };
+        PlaySession {
+            cluster_id: 1,
+            cluster_name: name.to_string(),
+            started_at: start.to_string(),
+            ended_at: end.to_string(),
+            secs: (e - s).num_seconds(),
+        }
+    }
+
+    #[test]
+    fn sessions_group_by_the_day_they_started() {
+        let sessions = vec![
+            play(
+                "2026-10-03T20:00:00+00:00",
+                "2026-10-03T21:30:00+00:00",
+                "Survival",
+            ),
+            play(
+                "2026-10-03T10:00:00+00:00",
+                "2026-10-03T10:15:00+00:00",
+                "Creative",
+            ),
+            play(
+                "2026-10-01T23:00:00+00:00",
+                "2026-10-02T00:30:00+00:00",
+                "Survival",
+            ),
+        ];
+
+        let groups = group_sessions_by_day(&sessions);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0, "2026-10-03");
+        assert_eq!(groups[0].1.len(), 2);
+        assert_eq!(groups[1].0, "2026-10-01");
+        assert_eq!(groups[1].1[0].secs, 5400);
+    }
+
+    #[test]
+    fn broken_timestamps_do_not_split_a_day() {
+        let sessions = vec![play(
+            "2026-10-03T10:00:00+00:00",
+            "2026-10-03T11:00:00+00:00",
+            "Survival",
+        )];
+        assert_eq!(group_sessions_by_day(&sessions)[0].0, "2026-10-03");
+
+        let mut broken = sessions.clone();
+        broken[0].started_at = "not a date".to_string();
+        assert!(group_sessions_by_day(&broken).is_empty());
     }
 }

@@ -1,6 +1,8 @@
 use freya::query::{Query, QueryCapability, UseQuery, use_query};
 use oneclient_core::LauncherError;
-use oneclient_core::game::{Analytics, cluster_analytics, global_analytics};
+use oneclient_core::game::{
+    Analytics, PlaySession, cluster_analytics, global_analytics, recent_sessions,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GlobalAnalyticsKeys;
@@ -54,5 +56,38 @@ pub fn use_cluster_analytics(cluster_id: i64) -> UseQuery<ClusterAnalyticsQuery>
 }
 
 pub fn try_cluster_analytics(query: &UseQuery<ClusterAnalyticsQuery>) -> Option<Analytics> {
+    super::state::settled_or_loading(query)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RecentSessionsKeys {
+    pub cluster_id: Option<i64>,
+    pub limit: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RecentSessionsQuery(RecentSessionsKeys);
+
+impl QueryCapability for RecentSessionsQuery {
+    type Ok = Vec<PlaySession>;
+    type Err = LauncherError;
+    type Keys = RecentSessionsKeys;
+
+    fn matches(&self, keys: &Self::Keys) -> bool {
+        self.0 == *keys
+    }
+
+    async fn run(&self, keys: &Self::Keys) -> Result<Self::Ok, Self::Err> {
+        let state = crate::launcher::state()?;
+        recent_sessions(&state.services.db, keys.cluster_id, keys.limit).await
+    }
+}
+
+pub fn use_recent_sessions(cluster_id: Option<i64>, limit: i64) -> UseQuery<RecentSessionsQuery> {
+    let keys = RecentSessionsKeys { cluster_id, limit };
+    use_query(Query::new(keys, RecentSessionsQuery(keys)))
+}
+
+pub fn try_recent_sessions(query: &UseQuery<RecentSessionsQuery>) -> Option<Vec<PlaySession>> {
     super::state::settled_or_loading(query)
 }

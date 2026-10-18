@@ -21,8 +21,8 @@ pub use cluster::{ClusterId, ClusterKind, ClusterPatch, ClusterRow, NewCluster};
 pub use cluster_bundle::{BundleTrackedArtifactRow, ClusterBundleOverrideRow, OverrideType};
 pub use cluster_optional_mod::{ClusterOptionalModRow, OptionalModStatus};
 pub use game_session::{
-    GameSessionId, GameSessionRow, GameSessionServerRow, NewGameSession, ServerJoinCount,
-    SessionSpan, UnfinishedSession,
+    GameSessionId, GameSessionRow, GameSessionServerRow, NewGameSession, RecentSessionRow,
+    ServerJoinCount, SessionSpan, UnfinishedSession,
 };
 pub use java::JavaVersionRow;
 pub use package_metadata::PackageMetadataRow;

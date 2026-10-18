@@ -19,7 +19,7 @@ impl Component for Stats {
             Some(a) if a.playtime.session_count == 0 => {
                 analytics_placeholder("No playtime recorded yet. Launch a game and come back!")
             }
-            Some(a) => analytics_body(a),
+            Some(a) => analytics_body(a, None),
         };
 
         rect()

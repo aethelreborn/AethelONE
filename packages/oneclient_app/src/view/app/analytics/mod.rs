@@ -10,19 +10,25 @@ use crate::ui::{border_all_color, columns_for};
 mod charts;
 mod heatmap;
 mod servers;
+mod sessions;
 mod tiles;
 
 use charts::{DailyChart, PlaytimeChart, distribution_card};
 use heatmap::PlaytimeHeatmap;
 use servers::servers_section;
+use sessions::SessionsTimeline;
 use tiles::{personas_row, tiles_row};
 
-pub fn analytics_body(analytics: &Analytics) -> Element {
-    analytics_body_inner(analytics, false)
+pub fn analytics_body(analytics: &Analytics, cluster_id: Option<i64>) -> Element {
+    analytics_body_inner(analytics, cluster_id, false)
 }
 
 /// `force_all` keeps the normally-hidden sections (session length servers) on screen
-fn analytics_body_inner(analytics: &Analytics, force_all: bool) -> Element {
+fn analytics_body_inner(
+    analytics: &Analytics,
+    cluster_id: Option<i64>,
+    force_all: bool,
+) -> Element {
     let stats = &analytics.playtime;
 
     let mut root = rect().vertical().width(Size::fill()).spacing(24.);
@@ -35,6 +41,7 @@ fn analytics_body_inner(analytics: &Analytics, force_all: bool) -> Element {
 
     root = root.child(DailyChart::new(stats.daily.clone()));
     root = root.child(PlaytimeHeatmap::new(stats.daily.clone()));
+    root = root.child(SessionsTimeline::new(cluster_id));
 
     let mut charts: Vec<Element> = vec![PlaytimeChart::from_stats(stats).into_element()];
     if let Some(dist) = distribution_card(&stats.session_secs, force_all) {
@@ -76,7 +83,7 @@ pub fn analytics_placeholder(note: &str) -> Element {
                 .width(Size::fill())
                 .opacity(0.4)
                 .interactive(false)
-                .child(analytics_body_inner(&empty_analytics(), true)),
+                .child(analytics_body_inner(&empty_analytics(), None, true)),
         )
         .into_element()
 }

@@ -47,6 +47,16 @@ pub struct ServerJoinCount {
     pub joins: i64,
 }
 
+/// A finished session with the display name of the instance that ran it,
+/// used by the recent-sessions timeline
+#[derive(Debug, Clone, FromRow)]
+pub struct RecentSessionRow {
+    pub cluster_id: i64,
+    pub cluster_name: String,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+}
+
 #[derive(Debug, Clone, FromRow)]
 pub struct SessionSpan {
     pub started_at: String,

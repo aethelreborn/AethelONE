@@ -39,7 +39,8 @@ mod versions;
 mod worlds;
 
 pub use analytics::{
-    try_cluster_analytics, try_global_analytics, use_cluster_analytics, use_global_analytics,
+    try_cluster_analytics, try_global_analytics, try_recent_sessions, use_cluster_analytics,
+    use_global_analytics, use_recent_sessions,
 };
 pub use auth::{
     AddOfflineAccountKeys, BeginMicrosoftLoginMutation, CancelMicrosoftLoginKeys,

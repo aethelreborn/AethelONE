@@ -2,8 +2,8 @@ use chrono::Utc;
 use sqlx::SqlitePool;
 
 use crate::models::{
-    GameSessionRow, GameSessionServerRow, NewGameSession, ServerJoinCount, SessionSpan,
-    UnfinishedSession,
+    GameSessionRow, GameSessionServerRow, NewGameSession, RecentSessionRow, ServerJoinCount,
+    SessionSpan, UnfinishedSession,
 };
 
 pub async fn insert_session(
@@ -234,6 +234,24 @@ pub async fn server_join_counts(
     .await
 }
 
+/// Finished sessions, newest first, optionally limited to one instance
+pub async fn recent_sessions(
+    pool: &SqlitePool,
+    cluster_id: Option<i64>,
+    limit: i64,
+) -> Result<Vec<RecentSessionRow>, sqlx::Error> {
+    sqlx::query_as::<_, RecentSessionRow>(
+        "SELECT s.cluster_id, c.name AS cluster_name, s.started_at, s.ended_at \
+         FROM game_sessions s JOIN clusters c ON c.id = s.cluster_id \
+         WHERE s.ended_at IS NOT NULL AND (?1 IS NULL OR s.cluster_id = ?1) \
+         ORDER BY s.started_at DESC LIMIT ?2",
+    )
+    .bind(cluster_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn all_session_spans(pool: &SqlitePool) -> Result<Vec<SessionSpan>, sqlx::Error> {
     sqlx::query_as!(
         SessionSpan,
@@ -299,4 +317,109 @@ pub async fn session_servers_for_cluster(
     )
     .fetch_all(pool)
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dao::cluster::insert;
+    use crate::models::NewCluster;
+
+    async fn pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite");
+        sqlx::migrate!().run(&pool).await.expect("migrations run");
+        pool
+    }
+
+    async fn seed_cluster(pool: &SqlitePool, name: &str) -> i64 {
+        insert(
+            pool,
+            &NewCluster {
+                name,
+                folder_name: name,
+                mc_version: "1.21.4",
+                mc_loader: 0,
+                mc_loader_version: None,
+                setting_profile_name: None,
+                stage: 0,
+                kind: 0,
+                user_created: 1,
+                description: None,
+                tags: "[]",
+                cover_path: None,
+            },
+        )
+        .await
+        .expect("insert cluster")
+        .id
+    }
+
+    async fn seed_session(pool: &SqlitePool, cluster_id: i64, started: &str, ended: &str) {
+        insert_session(
+            pool,
+            &NewGameSession {
+                cluster_id,
+                started_at: started,
+                ram_allocated_mb: 4096,
+                mods_enabled: 0,
+                java_vendor: None,
+                java_version: None,
+            },
+        )
+        .await
+        .expect("insert session");
+        finish_session_at(pool, started, ended, Some(0))
+            .await
+            .expect("finish session");
+    }
+
+    #[tokio::test]
+    async fn recent_sessions_join_the_instance_name_and_skip_open_ones() {
+        let pool = pool().await;
+        let survival = seed_cluster(&pool, "Survival").await;
+        let creative = seed_cluster(&pool, "Creative").await;
+
+        seed_session(
+            &pool,
+            survival,
+            "2026-10-01T10:00:00+00:00",
+            "2026-10-01T11:00:00+00:00",
+        )
+        .await;
+        seed_session(
+            &pool,
+            creative,
+            "2026-10-02T10:00:00+00:00",
+            "2026-10-02T10:30:00+00:00",
+        )
+        .await;
+        insert_session(
+            &pool,
+            &NewGameSession {
+                cluster_id: survival,
+                started_at: "2026-10-03T10:00:00+00:00",
+                ram_allocated_mb: 4096,
+                mods_enabled: 0,
+                java_vendor: None,
+                java_version: None,
+            },
+        )
+        .await
+        .expect("open session");
+
+        let all = recent_sessions(&pool, None, 10).await.unwrap();
+        assert_eq!(all.len(), 2, "open sessions are still running, not history");
+        assert_eq!(all[0].cluster_name, "Creative");
+        assert_eq!(all[1].cluster_name, "Survival");
+
+        let only_survival = recent_sessions(&pool, Some(survival), 10).await.unwrap();
+        assert_eq!(only_survival.len(), 1);
+        assert_eq!(only_survival[0].started_at, "2026-10-01T10:00:00+00:00");
+
+        let capped = recent_sessions(&pool, None, 1).await.unwrap();
+        assert_eq!(capped.len(), 1);
+        assert_eq!(capped[0].cluster_name, "Creative");
+    }
 }

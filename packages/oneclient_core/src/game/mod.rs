@@ -14,8 +14,8 @@ mod shared_dir;
 mod tail;
 
 pub use analytics::{
-    Analytics, DayPlaytime, Persona, PlaytimeStats, ServerStat, WEEKDAY_LABELS, aggregate_servers,
-    cluster_analytics, global_analytics,
+    Analytics, DayPlaytime, Persona, PlaySession, PlaytimeStats, ServerStat, WEEKDAY_LABELS,
+    aggregate_servers, cluster_analytics, global_analytics, group_sessions_by_day, recent_sessions,
 };
 pub use oneclient_mc::{
     append_profile_game_arguments, classpaths, download_to_path, fetch_bytes_verified,
