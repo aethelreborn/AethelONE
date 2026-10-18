@@ -67,7 +67,7 @@ impl SessionRecorder {
         ram_allocated_mb: u32,
         java: &JavaRuntime,
     ) -> Option<Self> {
-        let mods_enabled = count_enabled_mods(state, cluster_id).await;
+        let mods = enabled_mods(state, cluster_id).await;
 
         let java_vendor = java.vendor.to_string();
         let started_at = chrono::Utc::now().to_rfc3339();
@@ -75,7 +75,7 @@ impl SessionRecorder {
             cluster_id,
             started_at: &started_at,
             ram_allocated_mb: i64::from(ram_allocated_mb),
-            mods_enabled: mods_enabled as i64,
+            mods_enabled: mods.len() as i64,
             java_vendor: Some(java_vendor.as_str()),
             java_version: Some(java.version.as_str()),
         };
@@ -87,6 +87,19 @@ impl SessionRecorder {
                 return None;
             }
         };
+
+        // Best effort: the row exists and count for analytics without the
+        // snapshot; only the next crash's "what changed" line goes missing
+        if let Ok(snapshot) = serde_json::to_string(&mods)
+            && let Err(err) =
+                sqlx::query("UPDATE game_sessions SET mods_snapshot = ? WHERE started_at = ?")
+                    .bind(&snapshot)
+                    .bind(&session.started_at)
+                    .execute(&state.services.db)
+                    .await
+        {
+            tracing::warn!(cluster_id, error = %err, "failed to record the session mod snapshot");
+        }
 
         Some(Self {
             session_started_at: session.started_at,
@@ -185,16 +198,105 @@ impl SessionRecorder {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ModSnapshot {
+    pub hash: String,
+    pub name: String,
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+/// Whether a session snapshot says anything a crash notification should carry
+/// the question after a crash is always what changed since the game worked
+pub(crate) fn describe_changes(previous: &[ModSnapshot], current: &[ModSnapshot]) -> Vec<String> {
+    const MAX: usize = 4;
+
+    let mut updates = Vec::new();
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+
+    let same = |a: &ModSnapshot, b: &ModSnapshot| a.hash == b.hash;
+    let name_of = |m: &ModSnapshot| m.name.to_lowercase();
+
+    for now in current {
+        if previous.iter().any(|before| same(before, now)) {
+            continue;
+        }
+
+        match previous
+            .iter()
+            .find(|before| name_of(before) == name_of(now))
+        {
+            Some(before) => match (&before.version, &now.version) {
+                (Some(from), Some(to)) if from != to => {
+                    updates.push(format!("{} {from} -> {to}", now.name));
+                }
+                _ => updates.push(format!("{} updated", now.name)),
+            },
+            None => added.push(format!("{} added", now.name)),
+        }
+    }
+
+    for before in previous {
+        let still_there = current
+            .iter()
+            .any(|now| same(before, now) || name_of(now) == name_of(before));
+        if !still_there {
+            removed.push(format!("{} removed", before.name));
+        }
+    }
+
+    let mut changes = updates;
+    changes.extend(added);
+    changes.extend(removed);
+
+    if changes.len() > MAX {
+        let extra = changes.len() - (MAX - 1);
+        changes.truncate(MAX - 1);
+        changes.push(format!("and {extra} more"));
+    }
+
+    changes
+}
+
+/// The mod set of the cluster's most recently finished session `None` when
+/// nothing has run since snapshots existed
+pub(crate) async fn previous_mod_snapshot(
+    db: &DbPool,
+    cluster_id: i64,
+    before: chrono::DateTime<chrono::Utc>,
+) -> Option<Vec<ModSnapshot>> {
+    let json = sqlx::query_scalar::<_, String>(
+        "SELECT mods_snapshot FROM game_sessions \
+         WHERE cluster_id = ? AND started_at < ? AND ended_at IS NOT NULL \
+         AND mods_snapshot IS NOT NULL \
+         ORDER BY started_at DESC LIMIT 1",
+    )
+    .bind(cluster_id)
+    .bind(before.to_rfc3339())
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()?;
+
+    serde_json::from_str(&json).ok()
+}
+
 #[tracing::instrument(skip(state), fields(cluster_id), level = "debug")]
-async fn count_enabled_mods(state: &Arc<LauncherState>, cluster_id: i64) -> usize {
+pub(crate) async fn enabled_mods(state: &Arc<LauncherState>, cluster_id: i64) -> Vec<ModSnapshot> {
     match PackageStore::list_linked_artifacts(cluster_id, &state.services.content()).await {
         Ok(linked) => linked
             .into_iter()
             .filter(|a| a.enabled && a.content_type == ContentType::Mod)
-            .count(),
+            .map(|a| ModSnapshot {
+                name: a.display_name.unwrap_or(a.file_name),
+                version: a.display_version,
+                hash: a.hash,
+            })
+            .collect(),
         Err(err) => {
-            tracing::warn!(cluster_id, error = %err, "failed to count mods for session");
-            0
+            tracing::warn!(cluster_id, error = %err, "failed to list mods for the session");
+            Vec::new()
         }
     }
 }
@@ -240,5 +342,74 @@ mod tests {
             parse_server_join("[INFO]: Connecting to voice chat server: 'vc.example.com:24454'")
                 .is_none()
         );
+    }
+
+    fn mods(entries: &[(&str, &str, Option<&str>)]) -> Vec<ModSnapshot> {
+        entries
+            .iter()
+            .map(|(hash, name, version)| ModSnapshot {
+                hash: hash.to_string(),
+                name: name.to_string(),
+                version: version.map(str::to_string),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn changes_name_updates_by_version_and_additions() {
+        let previous = mods(&[("a", "Sodium", Some("0.5.8")), ("b", "Iris", Some("1.7"))]);
+        let current = mods(&[
+            ("c", "Sodium", Some("0.5.9")),
+            ("b", "Iris", Some("1.7")),
+            ("d", "Jade", Some("11.0")),
+        ]);
+
+        assert_eq!(
+            describe_changes(&previous, &current),
+            vec!["Sodium 0.5.8 -> 0.5.9", "Jade added"]
+        );
+    }
+
+    #[test]
+    fn unchanged_mods_never_show_up() {
+        let previous = mods(&[("a", "Sodium", Some("0.5.8"))]);
+        let current = mods(&[("a", "Sodium", Some("0.5.8"))]);
+        assert!(describe_changes(&previous, &current).is_empty());
+    }
+
+    #[test]
+    fn removals_count_but_moves_do_not() {
+        let previous = mods(&[("a", "Sodium", None), ("b", "Jade", None)]);
+        let current = mods(&[("a", "Sodium", None)]);
+        assert_eq!(describe_changes(&previous, &current), vec!["Jade removed"]);
+    }
+
+    #[test]
+    fn a_long_list_is_capped_with_a_tail() {
+        let previous: Vec<ModSnapshot> = Vec::new();
+        let current = mods(&[
+            ("a", "One", None),
+            ("b", "Two", None),
+            ("c", "Three", None),
+            ("d", "Four", None),
+            ("e", "Five", None),
+            ("f", "Six", None),
+        ]);
+
+        let changes = describe_changes(&previous, &current);
+        assert_eq!(changes.len(), 4);
+        assert_eq!(changes[3], "and 3 more");
+    }
+
+    #[test]
+    fn snapshots_round_trip_through_json_and_tolerate_missing_versions() {
+        let list = mods(&[("a", "Sodium", Some("0.5.8")), ("b", "Jade", None)]);
+        let json = serde_json::to_string(&list).expect("serializes");
+        let back: Vec<ModSnapshot> = serde_json::from_str(&json).expect("parses");
+        assert_eq!(back, list);
+
+        let bare: Vec<ModSnapshot> =
+            serde_json::from_str(r#"[{"hash":"c","name":"Bare"}]"#).expect("parses");
+        assert_eq!(bare[0].version, None);
     }
 }

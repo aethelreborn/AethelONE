@@ -14,7 +14,7 @@ use crate::LauncherResult;
 use crate::clusters::Cluster;
 use crate::game::GameError;
 use crate::game::crash_triage::{self, CrashCandidate};
-use crate::game::session::SessionRecorder;
+use crate::game::session::{self, SessionRecorder};
 use crate::game::tail::spawn_log_tail;
 use crate::settings::GameSettingsProfile;
 use crate::state::LauncherState;
@@ -643,36 +643,62 @@ async fn crash_suspicion(
     cluster: &Cluster,
     started_at: DateTime<Utc>,
 ) -> Option<CrashSuspicion> {
-    let dir = cluster.dir().ok()?;
-    let report = newest_crash_report(&dir.join("crash-reports"), started_at)?;
-    let text = read_report_head(&report)?;
     let candidates = crash_candidates(state, cluster.id).await;
 
     let blamable: Vec<CrashCandidate> = candidates
         .iter()
         .map(|(candidate, _)| candidate.clone())
         .collect();
-    let triage = crash_triage::triage(&text, &blamable);
-    if triage.suspects.is_empty() {
-        return None;
+
+    let report_triage = match cluster
+        .dir()
+        .ok()
+        .and_then(|dir| newest_crash_report(&dir.join("crash-reports"), started_at))
+        .and_then(|report| read_report_head(&report).map(|text| (report, text)))
+    {
+        Some((report, text)) => {
+            let triage = crash_triage::triage(&text, &blamable);
+            if !triage.suspects.is_empty() {
+                tracing::info!(
+                    suspects = ?triage.suspects,
+                    description = ?triage.description,
+                    report = %report.display(),
+                    "crash report names suspects"
+                );
+            }
+            triage
+        }
+        None => crash_triage::triage("", &blamable),
+    };
+
+    // Stack traces explain a crash; the mods that changed since the last run
+    // often explain why it is this crash and not every other one
+    let current = session::enabled_mods(state, cluster.id).await;
+    let changes =
+        match session::previous_mod_snapshot(&state.services.db, cluster.id, started_at).await {
+            Some(previous) => session::describe_changes(&previous, &current),
+            None => Vec::new(),
+        };
+
+    let mut parts = Vec::new();
+    if !report_triage.suspects.is_empty() {
+        let mut part = format!("Likely caused by {}", report_triage.suspects.join(", "));
+        if let Some(desc) = report_triage.description {
+            let desc: String = desc.chars().take(64).collect();
+            let _ = write!(part, " ({desc})");
+        }
+        parts.push(part);
+    }
+    if !changes.is_empty() {
+        parts.push(format!(
+            "Changed since the last launch: {}",
+            changes.join(", ")
+        ));
     }
 
-    tracing::info!(
-        suspects = ?triage.suspects,
-        description = ?triage.description,
-        report = %report.display(),
-        "crash report names suspects"
-    );
-
-    let mut note = format!("Likely caused by {}", triage.suspects.join(", "));
-    if let Some(desc) = triage.description {
-        let desc: String = desc.chars().take(64).collect();
-        let _ = write!(note, " ({desc})");
-    }
-
-    Some(CrashSuspicion {
-        note,
-        disable: disable_target(&triage.suspects, &candidates),
+    (!parts.is_empty()).then(|| CrashSuspicion {
+        note: parts.join(". "),
+        disable: disable_target(&report_triage.suspects, &candidates),
     })
 }
 
