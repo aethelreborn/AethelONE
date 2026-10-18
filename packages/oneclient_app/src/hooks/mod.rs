@@ -81,6 +81,10 @@ pub use queries::{
     try_world_datapacks, try_world_size, try_world_snapshots, use_cluster_worlds,
     use_saves_folder_watch, use_world_datapacks, use_world_size, use_world_snapshots,
 };
+pub use queries::{
+    invalidate_config_content, invalidate_config_files, try_config_content, try_config_files,
+    use_config_content, use_config_files, write_config_file,
+};
 
 use crate::notifications::NotificationSnapshot;
 use crate::state::{

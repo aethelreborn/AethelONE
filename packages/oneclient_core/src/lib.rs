@@ -40,6 +40,9 @@ pub use migration::{
     ImportTarget, MigrationDetection, MigrationSource, SourceInstance, detect as detect_migration,
     import_game_dir as import_migration_game_dir,
 };
+pub use oneclient_cluster::configs::{
+    ConfigFileInfo, ConfigsError, list_config_files, read_config_file, write_config_file,
+};
 pub use oneclient_cluster::export::export_cluster;
 pub use oneclient_cluster::logs::{
     LogFileInfo, LogKind, LogLevel, LogLine, LogsError, MclogsUploadResponse, ReadOptions,

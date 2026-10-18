@@ -43,6 +43,9 @@ pub enum ClusterError {
     #[error(transparent)]
     Worlds(#[from] crate::worlds::WorldsError),
 
+    #[error(transparent)]
+    Configs(#[from] crate::configs::ConfigsError),
+
     #[error("failed to export instance: {0}")]
     Export(String),
 

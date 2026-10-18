@@ -3,6 +3,7 @@ mod overview;
 mod package_manager;
 
 mod cluster_settings;
+mod configs;
 mod datapacks;
 mod folder_list;
 mod modpack_settings;
@@ -17,6 +18,7 @@ pub use logs::ClusterLogs;
 pub use overview::ClusterOverview;
 
 pub use cluster_settings::ClusterSettings;
+pub use configs::ClusterConfigs;
 pub use datapacks::ClusterDataPacks;
 pub(crate) use folder_list::{dialog, supports_datapacks};
 pub use mods::ClusterMods;

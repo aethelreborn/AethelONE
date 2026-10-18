@@ -45,6 +45,7 @@ fn is_cluster_route(route: &Route) -> bool {
             | Route::ClusterTextures { .. }
             | Route::ClusterWorlds { .. }
             | Route::ClusterDataPacks { .. }
+            | Route::ClusterConfigs { .. }
             | Route::ClusterSettings { .. }
     )
 }

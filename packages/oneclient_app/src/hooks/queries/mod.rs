@@ -15,6 +15,7 @@ mod bundles;
 mod changelog;
 mod cluster_content;
 mod clusters;
+mod configs;
 mod disable_warnings;
 mod folder_watch;
 mod image;
@@ -64,6 +65,10 @@ pub use cluster_content::{
     use_mods_folder_sync, use_shadowed_mods,
 };
 pub use clusters::{export_instance, import_instance, use_cluster, use_clusters};
+pub use configs::{
+    invalidate_config_content, invalidate_config_files, try_config_content, try_config_files,
+    use_config_content, use_config_files, write_config_file,
+};
 pub use disable_warnings::{DisableWarningsQuery, disable_warnings, use_disable_warnings};
 pub(crate) use folder_watch::use_folder_watch;
 pub use image::{CachedImageQuery, loaded_image, use_cached_image};

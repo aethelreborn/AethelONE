@@ -153,6 +153,12 @@ fn cluster_commands(clusters: &[Cluster]) -> Vec<Command> {
             Route::ClusterWorlds { cluster_id: id },
         ));
         commands.push(Command::new(
+            format!("{}: Configs", cluster.name),
+            format!("{loader} {}", cluster.mc_version),
+            IconType::File02,
+            Route::ClusterConfigs { cluster_id: id },
+        ));
+        commands.push(Command::new(
             format!("{}: Logs", cluster.name),
             format!("{loader} {}", cluster.mc_version),
             IconType::Terminal,

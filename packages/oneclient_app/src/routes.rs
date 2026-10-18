@@ -13,8 +13,9 @@ use crate::view::{
         AccountSkins, Clusters, Debug, Home, Stats,
         browser::{Browser, BrowserPackage},
         cluster::{
-            ClusterDataPacks, ClusterLogs, ClusterMods, ClusterOverview, ClusterScreenshots,
-            ClusterSettings, ClusterShaders, ClusterTextures, ClusterWorlds, ProcessLogs,
+            ClusterConfigs, ClusterDataPacks, ClusterLogs, ClusterMods, ClusterOverview,
+            ClusterScreenshots, ClusterSettings, ClusterShaders, ClusterTextures, ClusterWorlds,
+            ProcessLogs,
         },
         settings::{
             SettingsAccounts, SettingsApis, SettingsAppearance, SettingsChangelog,
@@ -84,6 +85,8 @@ pub enum Route {
                 ClusterWorlds { cluster_id: i64 },
                 #[route("/app/clusters/:cluster_id/datapacks")]
                 ClusterDataPacks { cluster_id: i64 },
+                #[route("/app/clusters/:cluster_id/configs")]
+                ClusterConfigs { cluster_id: i64 },
                 #[route("/app/clusters/:cluster_id/settings")]
                 ClusterSettings { cluster_id: i64 },
             #[end_layout]
@@ -154,6 +157,7 @@ impl Route {
             Route::ClusterTextures { .. } => "Cluster Textures".to_string(),
             Route::ClusterWorlds { .. } => "Cluster Worlds".to_string(),
             Route::ClusterDataPacks { .. } => "Cluster Data Packs".to_string(),
+            Route::ClusterConfigs { .. } => "Cluster Configs".to_string(),
             Route::ClusterSettings { .. } => "Cluster Settings".to_string(),
             Route::Browser { .. } => "Browser".to_string(),
             Route::BrowserPackage { .. } => "Browser".to_string(),

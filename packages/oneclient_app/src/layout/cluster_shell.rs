@@ -27,6 +27,7 @@ pub enum ClusterViewShellTab {
     Textures,
     Worlds,
     DataPacks,
+    Configs,
     Settings,
 }
 
@@ -42,6 +43,7 @@ impl ClusterViewShellTab {
             Self::Textures => "Textures",
             Self::Worlds => "Worlds",
             Self::DataPacks => "Data packs",
+            Self::Configs => "Configs",
             Self::Settings => "Settings",
         }
     }
@@ -57,6 +59,7 @@ impl ClusterViewShellTab {
             Self::Textures => Some(Route::ClusterTextures { cluster_id }),
             Self::Worlds => Some(Route::ClusterWorlds { cluster_id }),
             Self::DataPacks => Some(Route::ClusterDataPacks { cluster_id }),
+            Self::Configs => Some(Route::ClusterConfigs { cluster_id }),
             Self::Settings => Some(Route::ClusterSettings { cluster_id }),
         }
     }
@@ -73,6 +76,7 @@ impl ClusterViewShellTab {
             Self::DataPacks => 7,
             Self::Settings => 8,
             Self::GameLog => 9,
+            Self::Configs => 10,
         }
     }
 }
@@ -94,6 +98,7 @@ fn route_cluster(route: &Route) -> Option<(i64, ClusterViewShellTab)> {
         Route::ClusterTextures { cluster_id } => (*cluster_id, ClusterViewShellTab::Textures),
         Route::ClusterWorlds { cluster_id } => (*cluster_id, ClusterViewShellTab::Worlds),
         Route::ClusterDataPacks { cluster_id } => (*cluster_id, ClusterViewShellTab::DataPacks),
+        Route::ClusterConfigs { cluster_id } => (*cluster_id, ClusterViewShellTab::Configs),
         Route::ClusterSettings { cluster_id } => (*cluster_id, ClusterViewShellTab::Settings),
         _ => return None,
     })
@@ -359,6 +364,7 @@ fn cluster_tabs(
         Some(ClusterViewShellTab::Textures),
         Some(ClusterViewShellTab::Worlds),
         show_datapacks.then_some(ClusterViewShellTab::DataPacks),
+        Some(ClusterViewShellTab::Configs),
         Some(ClusterViewShellTab::Settings),
         show_game_log.then_some(ClusterViewShellTab::GameLog),
     ];
