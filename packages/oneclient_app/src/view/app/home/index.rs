@@ -3,6 +3,8 @@ use freya::prelude::*;
 use crate::components::{ActiveClusterPanel, RecentsRow};
 use crate::theme;
 
+use super::whats_new::WhatsNew;
+
 #[derive(PartialEq)]
 pub struct Home;
 
@@ -25,5 +27,6 @@ impl Component for Home {
                     .child(ActiveClusterPanel),
             )
             .child(RecentsRow)
+            .child(WhatsNew)
     }
 }
