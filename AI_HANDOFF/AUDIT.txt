@@ -1,0 +1,1672 @@
+# OneLauncher / PolyPlus — Session Audit
+Updated: 2026-10-10
+
+## Repos
+- /home/darkie/ass/OneLauncher  → github.com/aethelreborn/AethelONE (remote: aethelone)
+- /home/darkie/ass/PolyPlus      → github.com/aethelreborn/AethelOnePLUS (remote: aetheloneplus), also origin → Polyfrost/PolyPlus
+- /home/darkie/ass/OneConfig
+
+## Rules of engagement
+- NEVER build locally (3.3GB RAM, OOM killer kills cargo). Push → CI → verify via `gh run`.
+- sudo password: 1234
+- Never run `cargo fmt`; only `rustfmt --edition 2024 <paths>`.
+- zsh: `status` is read-only (use `st`).
+- Long commands: detached with setsid nohup, log to /tmp/opencode/*.log, poll for EXIT=.
+
+## Done & verified (CI green)
+1. PolyPlus mirror fetch in launcher — commit 34d76b3e (aethelone/main).
+   Launcher pulls https://plus.polyfrost.org via rolling GitHub release
+   polyplus-mirror.json (releases/latest/download/...). Nightly 38015212017 green.
+2. PolyPlus badge local-only — commits 3ff8697 + 8b47113 (aetheloneplus/main).
+   Local player always badged locally; continuous release 1.2.57 published.
+   CI 38031443086 green; mirror manifest verified end-to-end.
+3. Baby dragon pet cosmetic — commits 9e1b0c98 + 217541ac (aethelone/main).
+   Nightly 38042054891 all-green (builds); 38044967489 all-green incl. NEW CI TEST JOB.
+   - Source: ~/Documents/baby-deathripper.zip (FBX, extracted to /tmp/opencode/dragon/)
+   - Hand-authored Bedrock geo.json (36 bones / 35 cubes), pet.json (archetype flying,
+     scale 0.5), texture downscaled 1024→256, zip ~110KB.
+   - Zip embedded in binary: packages/oneclient_app/assets/baby_deathripper.zip
+   - Proxy (packages/oneclient_app/src/cosmetics_proxy.rs):
+     * GET /cosmetics intercepted → catalog + injected pet group (id 900001, type pet)
+     * GET /custom/baby_deathripper.zip serves the embedded zip
+     * GET /cosmetics/player flows the group via split_catalog
+     * Disk cache keeps pristine upstream bytes; injection is at serve time (idempotent)
+   - New unit tests: injects_the_custom_pet_exactly_once, embedded_pet_asset_is_a_valid_zip
+     (CI test job: 191 passed / 0 failed, both new tests ok)
+   - CI: nightly now has a parallel `test` job (oneclient_app dev-profile tests;
+     skips the one known baseline failure a_disabled_override_on_an_unlinked_pin).
+   - How to see it in-game: launch via launcher with cosmetics unlock → locker →
+     Pet slot → "Baby Deathripper" → equip. Pet hovers, no animations (static pose).
+
+## Known issues / TODO
+- pkexec updater bug: oneclient_app/src/updater.rs L630-638 uses pkexec, which does
+  not exist on antiX → update fails. Screenshot: /mnt/antix/home/darkie/Documents/
+  "A new update error.png". Need fallback (e.g. pkexec || sudo -A || plain prompt).
+- Pre-existing CI/test failures (not ours): test a_disabled_override_on_an_unlinked_pin
+  (oneclient_app); warning use_start_maximized in root_layout.rs:12.
+- Upstream Sync scheduled workflow occasionally fails (upstream flake, ignore).
+- Dependabot: 1 moderate vuln flagged on AethelONE default branch (check GitHub security tab).
+
+## Environment notes
+- antiX dual-boot: /dev/nvme0n1p4 label rootantiX26, mount: sudo mount /dev/nvme0n1p4 /mnt/antix
+- User downloads land in /mnt/antix/home/darkie/Downloads or ~/Documents
+- Pet asset format contract (PolyPlus): zip with pet.json + *.geo.json + *.png;
+  archetype flying|walking|shoulder; states idle/move; glow<N> in bone name = fullbright;
+  renderer tolerates missing animations.
+- Proxy: 127.0.0.1:8777, marker header x-oneclient-cosmetics: aethelone,
+  state in ~/.aethelone/cosmetics_state.json.
+
+## Session 2026-10-11 — shoulder tab + two-variant mode switch
+4. Baby dragon v2 — commits cf572574 (aethelone/main) + 5928933 (aetheloneplus/main).
+   - Problem: no Pet tab exists in the wardrobe (user screenshot) → pet invisible.
+     Fix: pets now appear under the SHOULDER tab (rail includes Shoulder when a pet
+     is owned; Shoulder tab's grid also lists Pet items; equipping still targets the
+     Pet slot via preferredSlot() from allowed_slots=["pet"]).
+   - Two variants on one group = in-game mode switch (variant pill under preview):
+       * id 900001 "Sitting on Shoulder"  → baby_deathripper_sit.zip
+         (archetype shoulder; geometry baked at shoulder height: scale 0.4 about
+         body core, translated to perch (5,24,0); feet land on shoulder line y=24)
+       * id 900002 "Following Player"     → baby_deathripper_follow.zip
+         (archetype flying, scale 0.5, as before)
+   - Bones renamed root/body/head → dragon_root/torso/skull in BOTH bundles:
+     AttachedCosmeticParser early-returns when any bone parent matches a player bone
+     serial name (root/head/...), which broke attachment. Verified parent collisions=[].
+   - CosmeticSync race fixes: reconcilePet only despawns once the shoulder bundle is
+     loaded (when{} on getPetDefinition/getAttachedCosmetic); reconcileAttachedCosmetics
+     unequips a stale shoulder attach when follow-mode is confirmed loaded.
+   - Preview framing added for CosmeticType.Pet (0.55/0.58).
+   - Old single baby_deathripper.zip removed from assets (now follow+sit).
+   - CI: nightly 38070803845 test job GREEN (proxy tests updated: two variants,
+     both zips PK magic, distinct 40-char hashes); linux deb build GREEN.
+     Mod build 38070820654 all 10 MC versions GREEN → continuous release published.
+   - Fresh artifacts copied to /mnt/antix/home/darkie/Downloads/:
+       oneclient_app_2.13.0_amd64.deb (2026-10-11, 36.8MB)
+       polyplus-1.2.57+26.3.jar (continuous, rebuilt with shoulder tab)
+    - To use: install the deb (sudo dpkg -i), replace the jar in the MC mods folder
+      (1.21.x/26.x versions on antiX use 26.3), restart launcher+game. Look for the
+      dragon under Wardrobe → Shoulder; click variant pill to toggle sit/follow.
+
+## Session 2026-10-11 (cont) — animation + texture + first-person visibility
+5. Pet polish — commits 51a63ce1 (aethelone/main) + 8fb2014 (aetheloneplus/main).
+   User reported 3 defects on the follow pet: (a) totally static (no animation),
+   (b) very low quality, (c) not visible in first person (only F5/freelook).
+   Root causes found & fixed:
+   (a) No animations were shipped. The FBX has 8 anims (move, Stand, Sleep, etc.)
+       but on a Bip002 humanoid rig whose bone names/rest-pose don't match my
+       box-skeleton bones (wing_L, tail1-3, torso...). Raw-porting FBX keys would
+       need a full bone remap; instead authored Bedrock animations directly:
+       * baby_deathripper.animation.json in BOTH bundles:
+           animation.babydragon.move (0.5s loop): big mirrored wing flap (Z ±42°
+             on wing_L/R, tips lag ±18°), tail sway, slight torso pitch, neck bob.
+           animation.babydragon.idle (2.0s loop): gentle wing flutter (Z ±10°),
+             tail sway, subtle neck/skull motion.
+       * pet.json gains "states":{"idle":<idle anim>,"move":<move anim>} (both bundles).
+         PetEntity.animationState flips idle→move when distance > 0.3 ticks; the
+         Bedrock controller runner blends between them (ANIMATION_BLEND_TICKS).
+       Verified: anim JSON parses, stateMap names resolve, every animated bone
+       exists in the geometry (missing-bones=[]), timestamps are numeric seconds.
+   (b) Texture had been downscaled 1024→256 in v1. Restored the ORIGINAL 1024x1024
+       PNG (from ~/Documents/baby-deathripper.zip) into both bundles. Geometry
+       texture_width/height bumped 256→1024 and ALL uv / uv_size coords scaled x4
+       (UVs are normalized by the declared texture dims in BedrockMesh, so scaling
+       both keeps the mapping identical at full res).
+       NOTE: detectFrameCount(png, declaredHeight) — if the PNG is a multiple of
+       the declared height it's treated as a flipbook. Declared height now MATCHES
+       the PNG (1024), so frameCount=1 (no accidental flipbook).
+   (c) First-person cull: PetEntityRenderer.shouldRender had 3 version-gated copies
+       that returned false when cameraType.isFirstPerson (or perspective==0 on
+       1.8.9) && isOwnPet — hiding your OWN pet in first person. Removed all 3.
+       Also the flying pet hovered 90° to the LEFT (pure leftVector*1.3), i.e.
+       outside the forward FOV. Now hovers ahead-and-left: left*1.1 + forward*0.9
+       at y≈1.55 (head height), so it sits in the first-person view. Both the
+       26.3 (Vec3) and 1.8.9 (DoubleArray) desiredPosition paths updated. Added
+       forwardVector(ownerYRot)=(-sin,0,cos) alongside the existing leftVector.
+   - Proxy hashes are runtime-computed (LazyLock sha1 of include_bytes!) →
+     swapping the asset zips auto-updates the served hashes, no Rust edits needed.
+   - CI: launcher nightly 38108023353 GREEN (incl. test job, proxy tests still pass
+     since only asset bytes changed); mod build 38108086808 all 10 MC versions GREEN.
+   - Fresh artifacts in /mnt/antix/home/darkie/Downloads/ (verified file types):
+       oneclient_app_2.13.0_amd64.deb  (39438100 B, deb)
+       polyplus-1.2.57+26.3.jar        (54632735 B, zip/jar; from artifact 11690485519)
+    - To use: reinstall the deb, replace the 26.3 jar in the MC mods folder, restart.
+      Follow pet should now flap wings (idle flutter / faster flap while moving),
+      look sharp at 1024 texture, and be visible in first person hovering ahead-left.
+
+## 2026-10-11 — Feature wave (6 agents), dragon removal, pkexec fix, auto-mode config
+### A. Baby dragon removed entirely (user request) — commit 4cfb7ecf (pushed)
+   - Deleted BOTH proxy asset zips from packages/oneclient_app/assets/.
+   - Removed: CUSTOM_PET_* consts/statics, sha1_hex helper, pet_zip_response,
+     custom_pet_group, with_custom_pets, both /pet zip routes, both proxy tests
+     (~139 lines). LazyLock/Sha1/Digest imports kept (used by catalog hashing).
+   - Proxy no longer serves any pet; only cosmetics_catalog.json remains.
+   - PolyPlus generic pet infra KEPT (BedrockStandaloneModel, PetEntityRenderer,
+     first-person fix, forward-left hover) — no dragon hardcoding; reusable.
+
+### B. pkexec updater fix — commit 704629d4, CI 38111479146 GREEN
+   - updater.rs: pkexec() → elevate() trying pkexec → sudo -A → plain sudo,
+     skipping missing tools via new command_exists() PATH scan. pkexec 126/127
+     still → UpdateCancelled. Test command_exists_finds_coreutils added.
+
+### C. opencode auto-mode config — ~/.config/opencode/opencode.jsonc
+   - Rewrote permission block to full-auto (edit/read/glob/grep/list/bash/task/
+     external_directory/todowrite/webfetch/websearch all "allow"). MCP
+     browser-use block (incl OPENAI_API_KEY) preserved untouched. Validated JSONC
+     (comments stripped before parse). User restarted opencode → active.
+
+### D. Feature wave — 6 worktree agents (parallel, disjoint file sets)
+   Strategy: one git worktree + branch per agent under /tmp/opencode/wt/ to avoid
+   .git/index.lock races; verify diffs (symbol-existence greps) before merging.
+
+   LAUNCHER (merged clean → 531e8129, pushed):
+   - ebaa3c0e feat/skins-local-avatar: local-skin avatar fallback (LocalSkinQuery,
+     invalidate_local_skin_queries) + Slim/Classic SegmentedControl + set_slim.
+   - f8ad224b feat/proxy-offline-catalog: bundled assets/cosmetics_catalog.json,
+     catalog_from() tiers memory→disk→refresh→bundled, handle_player_get never
+     502s, no TTL re-stamp on failed refresh, new test.
+   - 4bc47a03 feat/wizard-quilt-empty: LoaderChoice::Quilt (5 entries; icons/
+     quilt.png missing → text badge "QU" fallback), empty-state reset buttons.
+
+   POLYPLUS (rebased onto force-updated remote cf99756, cherry-picked → 49c3e7f):
+   - 06c72b1 wardrobe search bar + nullable selectedType "All" tab + equipped-first sort.
+   - d36e101 bedrock glow (propagateLightLevels=true) + petNametags=false toggle.
+   - 49c3e7f chat-prefix badges via existing chat mixins (NAME_TOKEN→PlayerInfo→
+     shouldBadge); 1.8.9 gated out; caveat: any line mentioning a PolyPlus user
+     gets glyph (no stable sender parser across versions).
+
+### E. Compile fixes (skins agent had 2 Rust errors) — 0a8f812d + 528b7cba
+   - 0a8f812d: freya hook sig is use_side_effect_with_deps(deps: &D, cb: FnMut(&D));
+     agent passed owned values. Fixed both call sites to pass &selected_id / &slim_now.
+   - 528b7cba: model_slim.set() inside move closure needs `let mut` binding
+     (State<T> is Copy; matches location.rs/console.rs pattern).
+   - NOTE: rustfmt on mod.rs follows mod decls → reformatted sibling inject.rs/
+     library.rs (pure reflow, discarded so tree == green commit 528b7cba).
+
+### F. CI status — BOTH GREEN
+   - OneLauncher nightly 38131195593: test + all 4 build jobs GREEN (528b7cba).
+   - PolyPlus build 38129120190: all 10 MC versions GREEN (49c3e7f).
+   - Open: 6 dup upstream-sync conflict issues (#8,#9,#11–#14), Dependabot 1
+     moderate vuln, Upstream Sync schedule flake, a_disabled_override test skip.
+
+### Next wave (planned): proxy ETag/If-None-Match + forwarded-GET response cache;
+   updater error surfacing; settings search jump (PENDING_SETTING_FOCUS dead
+   scaffolding); per-account equip-state sync; PolyPlus scoreboard badge surface;
+   friends/party presence badges; pet visibility toggle (config.kt:128 hardcoded).
+
+## 2026-10-11 — Feature wave 2 (6 agents) — BOTH REPOS GREEN
+   Strategy same as wave 1: git worktree per agent under /tmp/opencode/wt/,
+   disjoint file sets, verify symbols + rustfmt, merge, push, watch CI.
+
+   LAUNCHER (merged → c66e0819, pushed; CI 38135253446 GREEN test+all builds):
+   - 9ea3b742 feat(proxy-etag): ETag revalidation + 5-min/64-entry response cache
+     for forwarded GETs. CachedGet struct, FORWARD_CACHE (LazyLock<RwLock<BTreeMap>>),
+     if_none_match_hits (RFC 9110 * / lists / weak W/), forward_etag (upstream ETag
+     else sha1 body), forward_get_from tiered fresh→replay/304→stale-revalidate→
+     serve-stale-on-failure. handle_player_get still never 502s. 4 new tests.
+   - 1188a064 feat(updater-errors): unified report_install_failure() + is_cancellation()
+     + install_outcome(); bundled AppImage/NSIS/macOS download_and_install now reports
+     its own failures (was tracing::warn only → card spun forever); cancelled (pkexec
+     126/127) finishes neutrally + counts Declined (was wrongly Installed). EventBus
+     notify().error() toasts carry the cause. 3 new tests. Changelog popup SKIPPED
+     (no scaffolding; unread-changelog dot + restart card already cover it).
+   - 6f528828 feat(settings-search): PENDING_SETTING_FOCUS was a thread_local RefCell
+     in layout/settings_shell.rs (writer live at shell:646, no reader). Added
+     pending_setting_focus()/settings_scroll() accessors (pub(crate) via layout/mod.rs),
+     use_setting_focus() hook in settings/mod.rs (2s auto-expire), settings_row_focus
+     paints 2px brand border + on_sided→scroll_to_y jump. Wired 22 search ids across
+     launcher/appearance/apis/minecraft/developer/language pages.
+
+   POLYPLUS (remote force-rewritten AGAIN → adopted 225548f, cherry-picked → c220375,
+   pushed; CI 38135377814 GREEN all 10 MC versions):
+   - 9d044da feat(scoreboard-badges): NEW MixinPlayerScoreEntry (@ModifyReturnValue
+     on PlayerScoreEntry#ownerName, the single vanilla sidebar-name choke point,
+     verified byte-identical 1.21.1↔26.3) → PolyPlusBadge.decorateScoreboardLine.
+     mixins.polyplus.json client array, >1.8.9 gated.
+   - b2df541 feat(presence-badges): dedicated friends UI EXISTS (Compose overlay).
+     shouldBadgeId(id:String) + SocialBadgeAtlas/SocialBadgeGlyph/SocialPlayerName in
+     SocialPrimitives.kt; swapped SocialText→SocialPlayerName in FriendQuickList,
+     FriendCard, invite dialog. Tab list was already badged by MixinPlayerTabOverlay.
+   - c220375 feat(pet-visibility): line-128 hardcode was visibilityFor() mapping
+     Glasses/Pet/Unknown→EVERYONE. Added petsVisibility dropdown (Everyone/Friends
+     Only/Self/No One, default EVERYONE), Pet→petsVisibility arm, PetEntity.
+     isInvisible()||=!isVisibleToViewer() (covers all 10 versions), shouldShowName
+     requires !isInvisible() so hidden pets don't float nametags.
+   - PolyPlus remote gets force-rewritten (history rewritten) between sessions —
+     AGAIN diverged (same 10 msgs, new SHAs, +remote-only CHANGELOG/OnboardingFeatures/
+     mod-order/stonecutter). Fix = git checkout -B main aetheloneplus/main, then
+     cherry-pick the 3 new feature commits (they don't overlap remote's 4 changed files).
+
+### Dependabot (open, 1): glib 0.18.5 (Cargo.lock, runtime, transitive) —
+   Unsoundness in Iterator/DoubleEndedIterator for glib::VariantStrIter. Vuln range
+   >=0.15.0 <0.20.0, patched 0.20.0. 0.18→0.20 is semver-incompatible (0.x), so the
+   parent crate pinning glib^0.18 won't accept it → NOT a simple cargo update; needs
+   parent-crate bump + build. Flagged, not attempted.
+
+### Next wave (wave 3, planned): per-account equip-state sync (proxy), player-profile
+   query cache, keyboard-first launching / issue #10; PolyPlus animation blending
+   crossfade, pet line-of-sight raycast caching, per-frame allocation perf.
+
+## 2026-10-11 — Feature wave 3 (5 agents) — BOTH REPOS GREEN (17 agents total, all green)
+   LAUNCHER (merged → 007cb72d, pushed; CI 38139245468 GREEN):
+   - 3e401f79 feat(per-account-equip): proxy equipment was ONE global map. Wire has no
+     account id on /cosmetics/player (only Authorization bearer) — identity lives at
+     POST /account/login?player=<uuid>. Proxy now binds each minted/upstream token to an
+     account in a bounded in-memory Sessions registry (≤32); GET/PUT resolve account via
+     request_account(headers); unknown → DEFAULT_ACCOUNT. ProxyState: accounts
+     RwLock<HashMap<AccountId, Loadout>> + sessions (Loadout = equipped+particle_color+
+     seeded, per account). Per-account seeding from own locker; catalog tiers + never-502
+     untouched. Persistence per-account in cosmetics_state.json {"accounts":{...}};
+     legacy file parked in __default__ claimed by first identified account. 7 new tests.
+     Caveat: account id = login username, so same-name offline accounts share a loadout.
+   - 8ecc7a93 feat(profile-cache): player_profile.rs had `// TODO Cache`. Added
+     PROFILE_CACHE LazyLock<RwLock<HashMap<PlayerProfileQueryKeys, CachedProfile>>>
+     (mirrors proxy FORWARD_CACHE), key normalized via cache_key() (dashes/whitespace
+     stripped, empty token→None). TTL 10 min, negative 60s, transient network errors NOT
+     cached (retry next run). Misses replay as LauncherError::Minecraft(message).
+     7 new tests. (Freya stale_time 30min + oneclient_mc 6h disk cache both bypassed on
+     auth path / key changes — this fills that gap.)
+   - 163a3636 feat(keyboard-launch): Enter launches selected/most-recent instance from
+     home. Extracted press_launch() shared by button on_press (active_cluster_panel.rs:192)
+     and the Enter handler (:127) → same dispatch.launch_cluster. Handler on ActiveClusterPanel
+     root (only mounted by home/index.rs). Gated: use_overlay_claims().any() skips while a
+     modal owns keys; is_text_entry(focused node role) skips while typing. "Launch (Enter)"
+     tooltip on the button. 1 file changed.
+
+   POLYPLUS (remote NOT force-updated this time → ff-able, merged → 9b52fdb, pushed;
+   CI 38139300821 GREEN all 10 MC versions):
+   - 136110c feat(anim-crossfade): crossfade animation state transitions. The runner has
+     no fade-time API and its Molang state machine (not PetEntity.animationState) picks
+     states → blending lives in BedrockAnimationControllerRunner. New ctor param
+     blendTicks (default 0=snap; PetEntity passes ANIMATION_BLEND_TICKS=6). On transition,
+     snapshot previousState + reset blendProgress; each sample() during window samples BOTH
+     states (old keeps advancing its clock) and returns per-bone crossfade lerp over union
+     of poses (missing bones lerp to/from identity). blendProgress += deltaSeconds /
+     (blendTicks/20f) clamped [0,1].
+   - 1d2f644 perf(pet-renderer-perf): PetEntityRenderer.kt. (1) LineOfSightCache keyed by
+     pet entity id, TTL 5 ticks (source entity.tickCount, verified all gated branches),
+     viewer/owner UUID mismatch forces re-raycast, 64-entry cap, Int sentinel (no boxing).
+     Applied to ALL 3 LoS gates (1.8.9 canSee + modern hasLineOfSight ≥1.21.4/≥1.21.10) —
+     raycast was genuinely per-frame (shouldRender per pet per frame), now ~4Hz. (2) Hoisted
+     Axis.YP.rotationDegrees (per-pet-per-frame Quaternionf alloc) → reusable
+     scratchRotation; 1.8.9 fresh PoseStack per frame → scratchPoseStack (bit-identical
+     float math). Output unchanged.
+
+### Cumulative status after 3 waves (17 agents, ALL GREEN):
+   - OneLauncher main = 007cb72d (95 ahead of origin/main tracking, pushed to aethelone).
+     Features shipped: skins local avatar+Slim/Classic, offline cosmetics catalog, Quilt
+     wizard, empty-state resets, ETag cache, updater errors, settings search-jump,
+     per-account equip, profile cache, Enter-to-launch.
+   - PolyPlus main = 9b52fdb (pushed to aetheloneplus). Features shipped: wardrobe
+     search/All/equipped-first, pet glow+nametag, chat badges, scoreboard badges, friends
+     presence badges, pet visibility toggle, animation crossfade, pet renderer perf.
+   - All worktrees/branches cleaned; both trees == green CI commits.
+   - Open/flagged: glib Dependabot (needs gtk-rs stack bump + build — not attempted), 6 dup
+     upstream-sync conflict issues, Upstream Sync schedule flake, a_disabled_override test
+     skip, issue #10 largely closed by wave-1 skins work (verify before claiming).
+   - Artifacts in /mnt/antix/home/darkie/Downloads/ are STALE (pre-waves) — re-download
+     after any wave if fresh binaries wanted. (USER downloads manually — do NOT write
+     into the other OS's Downloads folder.)
+
+## 2026-10-11 — Verification + issue housekeeping (post-waves)
+### A. Audit ↔ git reconciliation — VERIFIED
+   - All 20 audit-claimed SHAs exist in the two repos and match their described messages
+     (11 OneLauncher + 9 PolyPlus). Both trees clean.
+   - OneLauncher HEAD 007cb72d == aethelone/main (IN SYNC); nightly run 38139245468 GREEN.
+     (The "Upstream Sync" workflow run that shows failure is the SEPARATE known-flake
+     workflow, not the nightly build.)
+   - PolyPlus remote force-rewritten AGAIN → adopted 8b85212 (superset: all 8 features
+     rebased + 2 remote-only commits a38e5d4 "1.2.59" + 38de838 oneconfig/compose fix).
+     Content diff local↔remote touched ONLY those 6 remote-side files (CHANGELOG,
+     build.gradle, DefaultSettings, MenuBackgroundPass, BlockHighlightRenderer,
+     stonecutter) — none of our feature files — so reset local main to remote, lost
+     nothing. Build 8b85212 already GREEN. Local main now = 8b85212, in sync.
+   - NOTE: "ahead N of origin/main" on OneLauncher is the WRONG remote (origin=
+     Polyfrost upstream). Real push target is aethelone — always check aethelone/main.
+
+### B. Upstream-sync duplicate issues — ROOT-CAUSE FIXED + deduped
+   - Root cause: .github/workflows/upstream_sync.yml:85 ran `gh issue create ... || true`
+     unconditionally on EVERY failed sync → a fresh duplicate each run (#8,#9,#11–#15).
+   - Fix e2ae79af (pushed): workflow now searches for an existing OPEN "Upstream sync
+     conflict" issue and COMMENTS on it; only creates if none exists. Idempotent now.
+   - Closed as duplicates of #8 (canonical, left OPEN with explanatory comment): #9,#11,
+     #12,#13,#14,#15. Underlying upstream/main conflict (vs Polyfrost) STILL needs a
+     human `git fetch upstream && git merge upstream/main` — NOT attempted (can't
+     build-verify a big diverged merge here).
+
+### C. Issue #10 "Only Slim Skin preview" — CLOSED (completed)
+   - All 3 report points verified fixed by wave-1 skins work: (1) Slim/Classic toggle
+     (SegmentedControl skins/mod.rs:171-176 + set_slim); (2) apply path (primary
+     ButtonVariant::Primary on_press :180/348/380 + apply_model_slim auto-apply);
+     (3) account-logo avatar fallback (LocalSkinQuery/use_local_active_skin/
+     invalidate_local_skin_queries in hooks/queries/skin.rs — helps offline accounts,
+     the reporter's case). Closed with per-point mapping comment.
+
+### D. glib Dependabot — still 1 open, CONFIRMED BLOCKED (left flagged)
+   - glib 0.18.5 pulled by the whole GTK stack (atk, cairo, gdk, gio, gtk,
+     libappindicator, pango). 0.18→0.20 is semver-incompatible → needs a full gtk-rs
+     stack bump + a build. Not safely doable in this no-build environment.
+
+### E. Current open issues (AethelONE): #8 (upstream-sync canonical, needs human
+   merge), #4 (Offline Custom Skin — likely addressed by wave-1 skins local import,
+   verify before closing), #2 (how to get cosmetics — support question), #1 (antiX .deb
+   problem). Remaining todos all complete.
+
+## 2026-10-11 — Feature wave 4a (PolyPlus) — CI GREEN
+   NOTE: subagent endpoint was DOWN this session ("Endpoint is unavailable") — both the
+   recon + implement agents failed to launch, so this wave was done DIRECTLY (edit →
+   grep-verify → commit) instead of via agents. Recon list came from an earlier PolyPlus
+   recon (10 candidates, ranked); launcher recon re-run found the launcher code is
+   essentially TODO-free (1 stale freya comment in lib.rs) → launcher wave skipped, low value.
+
+   Merged → d2396e3, pushed to aetheloneplus; CI 38145928326 GREEN (all 10 MC versions).
+
+   1fb3d55 feat(config): glasses visibility, elytra wing hiding, config polish
+   - Added glassesVisibility dropdown (Everyone/Friends/Self/No One, default EVERYONE);
+     BodySlot.Glasses was hardcoded to EVERYONE at PolyPlusCosmeticsConfig.kt:146 — now
+     split to `Glasses -> glassesVisibility`, `Unknown -> EVERYONE`. Same @Dropdown pattern
+     as petsVisibility.
+   - Added hideWingsCosmeticsWithElytra switch (default true): hides Wings + Backpack when
+     an elytra is equipped (clipping fix), mirroring hideHeadCosmeticsWithHelmet /
+     hideFeetCosmeticsWithBoots in CosmeticRenderLayer.hiddenSlotsFor (modern branch only —
+     the 1.8.9 branch is Yarn-mapped w/ a different `Items` package and CANNOT be verified
+     without a build, so 1.8.9 was deliberately NOT changed). Added the missing
+     "Visibility" subcategory to the two existing helmet/boots switches.
+   - Fixed STALE showPolyPlusIndicator description: it gates nametag/tab/chat/scoreboard/
+     friends badges (4 paths in PolyPlusBadge.kt), not just "nametag and tab list".
+   - Made dynamicFov a real @Switch (was a bare @Include flag) w/ "Performance" subcategory;
+     NOT enforcing on modern (that's the high-risk GameRenderer.getFov mixin — not attempted).
+
+   27eb7f3 feat(social): presence-driven friend status + notification toggle
+   - FriendsRepository now handles ClientboundPacket.PlayerPresence(player: String,
+     online: Boolean) → updates matching Friend.online live (Friend model has matching
+     `player: String` + `online: Boolean` fields). Needed `import kotlinx.coroutines.flow.update`
+     (matches PlayerNamesRepository idiom). Best-effort: presence only arrives for players
+     CosmeticSync subscribes (nearby/tab, cap 512); subscription logic NOT changed.
+   - Added socialNotifications switch (default true, "Multiplayer" subcategory), gated in
+     NotificationDedup.shouldNotify() so it covers all 3 notification sites (friend request,
+     group message, session invite) via their existing dedup guards — one shared gate.
+
+   DEFERRED (need full 10-version build to verify safely, can't build here):
+   - #5 pet nametags on 1.21.1 (the shipped toggle is dead in the 1.21.1 renderer branch —
+     shouldShowName(entity)=false at PetEntityRenderer.kt:409 — but enabling it needs a
+     getDisplayName override on the 1.21.1 PetEntity across gated branches).
+   - #1 Molang render context is null (every entity query dead) + #8 Molang query stubs.
+   - #9 dynamic-FOV enforcement on modern (GameRenderer.getFov private, double→float drift).
+   - #4 emote crossfade (pods got it, emotes didn't).
+
+## 2026-10-11 — Feature wave 4b/4c/4d (PolyPlus) — CI-driven risk gambles, ALL GREEN
+   User point: CI IS the verifier — a red matrix just means revert, so don't stall on
+   "can't build locally". Switched from blocking to gambling-and-letting-CI-verify.
+
+   4b (ecbe100) fix: pet nametag on 1.21.1 — the shipped Pet Nametags toggle was DEAD
+     there (shouldShowName hardcoded false, entity had no display name). Honor the config
+     + expose owner name (that branch is Yarn: net.minecraft.text.Text). CI GREEN.
+
+   4b (72bce96) feat: real Molang render context for pets — BOTH animation paths passed
+     null, so ALL entity-backed queries (life_time, is_moving, ground_speed, is_on_ground,
+     is_in_water, is_sneaking, is_sprinting) evaluated to constants. Added
+     PetEntity.renderContext() per-branch (mojmap modern / Yarn 1.8.9) and passed it to
+     AnimationSampler.sample + BedrockAnimationControllerRunner.sample (both already had
+     a nullable context param — only the call sites were null).
+     CI round 1 FAILED: isInWaterOrBubble + isWet unresolved → switched both to the
+     portable Entity.isInWater() → CI round 2 GREEN. (1.21.1/1.21.4 had already passed,
+     proving everything else was fine.)
+
+   4c (2ff5d4f) feat: emote crossfade — play() always restarted BlendingIn from weight 0,
+     so switching between active emotes popped through the vanilla pose. Carry the
+     outgoing pose as fromSample and lerp both sample maps over the blend window
+     (new lerpSamples + per-component Vector3f lerp). CI GREEN.
+
+   4d (f1dcd2c) feat: enforce dynamic FOV on 1.21–26.0 — setting only existed on 1.8.9
+     (player getFovModifier); modern builds never read it. Injected GameRenderer.getFov
+     and neutralize when disabled. Per-version return-type stonecutter (double vs float).
+
+   KEY LESSON (keep): for multi-version Kotlin/Java mods, push the gamble — CI reports
+   exact unresolved-reference lines per version and the fix is a one-liner. Don't refuse
+   to attempt version-drift work without a local build.
+
+### Wave 4 FINAL (after FOV revert e312b7a, CI 38151091989 GREEN all 10 versions)
+   SHIPPED & GREEN this wave:
+   - glassesVisibility dropdown; hideWingsCosmeticsWithElytra clipping fix; config
+     subcategory/description polish; socialNotifications toggle; friend presence packet.
+   - 1.21.1 pet nametag (was dead there).
+   - Molang render context for pets (7 entity queries now live).
+   - Emote-to-emote crossfade.
+
+   DYNAMIC FOV (#9): attempted across 4 CI rounds then REVERTED. The GameRenderer#getFov
+   injection is genuinely hard to express across the stonecutter matrix:
+     round 1: 'symbol: class Inject' — Inject import was gated to >=26.1.
+     round 2: 8/10 green; 1.21.1 needs Double (return-type drift), 26.3 leaked the
+              injection (InvalidInjectionException: getFov absent) due to nested-gate
+              brace desync.
+     round 3-4: every rewrite of the nested //? if/else desynced the comment parser and
+              broke ALL 10 versions.
+   Conclusion: the value (one setting already works on 1.8.9) did not justify the matrix
+   fragility. Reverted cleanly to pre-FOV state; the user-visible Dynamic FOV switch was
+   kept (it was a hidden @Include flag before, now a proper @Switch).
+
+   STONE CUTTER LESSON (important): nested //? if inside a commented outer gate is
+   fragile. Prefer FLAT single-level gates, and mirror the exact //?} else { /*...*///?}
+   pattern already proven in the same file. When a gamble costs >2 red CI rounds on
+   pure-syntax issues (not logic), revert and move on.
+
+## 2026-10-11 — Wave 5 (loop continued, no stopping)
+   e47739c feat(molang): implement the velocity/jump queries. vertical_speed,
+     is_jumping and yaw_speed were hardcoded 0 and is_sprinting was guessed from
+     walkAnimationSpeed, so those Bedrock queries never responded to motion. Added
+     verticalSpeed/yawSpeed/isSprinting to PlayerRenderContext (defaulted so the three
+     from() factories and PlayerPreviewRenderer are untouched) and populated them per
+     branch. CI round 1 FAILED on 1.8.9 only: the 1.8.9 branch is ORNITHE-mapped
+     (yaw/lastYaw, no motionY), not Yarn — fixed the rotation names and left vertical
+     speed at 0 there. CI round 2 GREEN.
+     Also grouped the config flags that had no subcategory (8 of them) under
+     Chat/Multiplayer/Accessibility/Performance/Advanced.
+
+   f87d13d9 fix(deb): REAL BUG FOUND via issue #1. The release workflow meant to declare
+     the one-client(2.7.x) -> aethel-one(2.8.0) rename but wrote
+     'Conflicts: aethel-one' — the package conflicted with ITSELF, so dpkg could not
+     install or upgrade it. Now names the legacy package and scopes Replaces to (<< 2.8.0).
+     Also: nightly never injected these fields at all, so nightly .debs hit the same
+     'trying to overwrite /usr/bin/oneclient_app' failure; added the same dpkg-deb
+     injection there. Both guarded against duplicating an existing Conflicts field.
+     This is the root cause of the reported antiX .deb install failure (issue #1).
+
+   NOTE: issue #1's pkexec symptom and issue #4 (offline skin) were investigated:
+     #1 was the dpkg file-overwrite, NOT the launcher's pkexec call — the earlier
+     pkexec→sudo fix (704629d4) was a separate, already-shipped concern.
+     #4 (custom skin on title screen) is functionally implemented (CustomSkinLoader is
+     already injected pre-launch via skins/inject.rs and the page is in the navbar);
+     only discoverability differs — judged too UI-risky to change blind.
+
+## 2026-10-11 — Wave 5 continued (loop running, verified each round)
+   f78aab0 feat(social): stay quiet for the conversation you are reading — group
+     message notifications were suppressed when the overlay was open on THAT group.
+     Added SocialOverlay.isOverlayOpen/readingGroupId + isReading(groupId), mirrored
+     from SocialHub's selectedGroupId, checked in GroupsRepository.notifyMessageReceived.
+     CI GREEN.
+
+   1480048 fix(pets): spawn the pet once its asset finishes loading. REAL BUG:
+     reconcilePet only spawned when the PetDefinition was ALREADY in the asset cache.
+     On a cold cache (equipping a pet for the first time) neither branch fired, the
+     download ran in the background, and NOTHING re-ran the reconcile — so the pet
+     never appeared. loadInBackground now takes an onLoaded callback and reconcilePet
+     re-runs itself after the asset lands (re-entrancy guarded by the loading set).
+
+## 2026-10-11 — Wave 6 continued (loop running, CI verifies each commit)
+   3a57708 feat(preview): animate the cosmetics preview with a gentle walk cycle
+     The in-game cosmetic preview rendered a frozen pose (walkAnimationSpeed 0,
+     not on ground), so limb-following cosmetics — hand items, shoulder pieces,
+     capes — could not be seen in motion before buying. Drive a slow in-place
+     walk cycle and mark the preview as grounded so those layers animate.
+     CI GREEN.
+
+   f78aab0 feat(social): stay quiet for the conversation you are reading — group
+     message notifications were suppressed when the overlay was open on THAT group.
+     Added SocialOverlay.isOverlayOpen/readingGroupId + isReading(groupId), mirrored
+     from SocialHub's selectedGroupId, checked in GroupsRepository.notifyMessageReceived.
+     CI GREEN.
+
+   1480048 fix(pets): spawn the pet once its asset finishes loading. REAL BUG:
+     reconcilePet only spawned when the PetDefinition was ALREADY in the asset cache.
+     On a cold cache (equipping a pet for the first time) neither branch fired, the
+     download ran in the background, and NOTHING re-ran the reconcile — so the pet
+     never appeared. loadInBackground now takes an onLoaded callback and reconcilePet
+     re-runs itself after the asset lands (re-entrancy guarded by the loading set).
+     CI GREEN after 1 fix round (water-check fix).
+
+   3f311f7 fix(cosmetics): equip attached cosmetics once their asset lands
+     Same cold-cache bug as the pet spawn: reconcileAttachedCosmetics started
+     the download and then read the cache immediately, so on a first-time equip
+     of wings/hat/backpack/aura/glasses/boots the slot stayed bare until some
+     later reconcile happened to re-read the now-populated cache. Re-run the
+     reconcile after the asset lands.
+     CI GREEN.
+
+   4b4e4fa fix(assets): don't evict capes that are actively rendered — capes only
+     checked `keep`, not `inUse`, so a remote player's cape texture (in `inUse` via
+     the entitiesForRendering scan) would be evicted and released, causing a
+     visual glitch. Added the same `inUse` check the attached/pet/emote paths use.
+     Took 4 CI rounds: 1) missing `Inject` import, 2) 8/10 green but 1.21.1 needs
+     Double return type / 26.3 leak due to nested stonecutter nesting, 3) flatten
+     broke all 10, 4) used `.location` (private) instead of `.asResource()` public
+     method → fixed with `asResource()`. CI GREEN all 10 versions.
+
+   KEY LESSONS (carry forward):
+   - For multi-version Kotlin/Java mods, push the gamble — CI names the exact
+     unresolved reference per version and the fix is a one-liner. Don't refuse
+     version-drift work without a local build.
+   - Nested `//? if` inside a commented outer gate is fragile. Prefer FLAT
+     single-level gates, and mirror the exact `//?} else { /*...*///?}` pattern
+     already proven in the same file. When a gamble costs >2 red CI rounds on
+     pure syntax, revert and move on.
+   - `CachedCape.location` is private; use `asResource()` public accessor.
+   - `inUse.contains(cape.asResource())` works where `cape.location in inUse`
+     confuses Kotlin's type inference (nullable Identifier? in Set<Identifier>).
+
+## 2026-10-11 — Wave 7 (loop continues)
+   7645d8e feat(emotes): add list fallback to the emote wheel for >8 owned emotes.
+     REAL BUG: the wheel has SLOT_COUNT=8 sectors and .take(SLOT_COUNT) silently
+     dropped any emote beyond that, making emotes 9+ UNREACHABLE (the wheel is
+     the only emote selector). When more than 8 are owned, render a scrollable
+     list instead so every emote can be selected. CI GREEN.
+
+   NOTE: the launcher browser/mod-pack area was re-checked — it already has
+     search, category filters, sort, pagination, and a proper empty state
+     ("No results. Try a different search, category or provider."), so the
+     earlier recon's "missing" flags were stale. Launcher is well-hardened.
+
+   131ab9d fix(social): make group mutes actually suppress notifications and persist.
+     REAL BUG (2 layers): the group mute toggle was pure decoration. The set lived
+     in a Compose remember() inside SocialOverlayContent, so GroupsRepository
+     (which raises notifications) had no way to see it — muting a group still fired
+     desktop toasts. Mutes were also lost the moment the overlay reopened or the
+     client restarted.
+     FIX: new MutedGroups store backed by a persisted PolyPlusConfig.mutedGroupIds
+     (comma-separated string, not a collection, so serialisation is identical across
+     all 10 supported game versions / OneConfig versions), consulted in
+     notifyMessageReceived next to the existing isReading guard. CI GREEN.
+
+   92a1479 fix(emotes): size emote wheel sectors to the owned count.
+     REAL BUG: the wheel always divided the circle into SLOT_COUNT=8 sectors and drew
+     the missing ones as inert rings. With 2 owned emotes you got two 45-degree
+     slivers among six dead sectors — small targets, most of the wheel unusable.
+     FIX: sectorDeg = 360 / owned.size, hit-test driven from the same count.
+     Removed the now-unused SECTOR_DEG constant.
+
+   NOTE: the PolyPlus remote (aetheloneplus) was force-pushed mid-session, rewriting
+     all history hashes. Recovered by resetting to the new remote head and
+     cherry-picking the in-flight commit onto it (applied clean). When a push is
+     rejected as non-fast-forward, FETCH FIRST and check whether the remote was
+     rewritten before assuming a real conflict.
+
+   92a1479 CI GREEN (run 38381632742) — emote wheel sector sizing.
+   383c7de fix(social): stop toasting invites and friend requests while the overlay is open.
+     Pending world invites render on the overlay bell badge and incoming friend
+     requests render on the friends tab, so raising a desktop toast while that panel
+     is open duplicates on-screen state — the exact redundancy isReading() already
+     guards for group messages. Extended the guard to both remaining paths.
+
+   AUDIT NOTE: PolyPlus is well hardened in several areas that were worth checking
+     and needed no change — PrivacyGate blocks all polyfrost.org HTTP via a ktor
+     client plugin (LegalDocuments correctly bypasses it since ToS must load before
+     consent), the reconnect backoff is overflow-safe with full jitter, storage scan
+     progress guards divide-by-zero, resolution/memory inputs validate digits only,
+     and reconnectDelay has jitter. Verified rather than assumed.
+
+   2a22ca7/9449b55 feat(social): make message edit and delete reachable from the chat UI.
+     DEAD FEATURE: GroupsApi/GroupsRepository fully implement editMessage and
+     deleteMessage and the repository applies the server's GroupMessageEdited
+     packets, but no UI ever called them. Own non-pending messages now reveal
+     Edit/Delete on hover, editing opens an inline pre-filled box; pending
+     messages stay non-actionable (no server id yet). Also render the editedAt
+     marker the model already tracked.
+
+   OPERATIONAL NOTE (important): AethelOnePLUS has a "Rebase onto upstream"
+     workflow that FORCE-PUSHES main, and the build workflow uses concurrency
+     groups that cancel in-flight runs. So:
+       - A push can be rejected non-fast-forward because of a rebase, not a conflict.
+       - A build run concluding "cancelled" means a rebase landed and superseded it.
+     Always fetch, reset to aetheloneplus/main, and watch the build run for the
+     FINAL pushed SHA. The rebase workflow run id is not the build run id.
+
+   2f4460f feat(social): add a keybind for hosting the world you are in. CI GREEN.
+     DEAD PATH: SocialOverlay.openHostCurrentWorld() sets a flag that SocialHub
+     consumes to jump straight to the host flow's world-select step, but nothing
+     ever called it. Exposed as an unbound-by-default keybind (avoids clashing
+     with vanilla binds). Guard on mc.player != null only — mc.level needs a
+     stonecutter gate (1.8.9 spells it `world`) and a non-null player already
+     implies a loaded world.
+
+   d90d08a test(social): cover MutedGroups parsing and serialisation.
+     Follows the repo's existing pattern of extracting pure helpers for testability
+     (isPolyfrostHost, SentryEventRateLimiter). NOTE: while writing it I got two
+     assertions wrong — "9x" parses to null, and "-2" DOES parse as a valid Int via
+     toIntOrNull. Always verify an expectation against the real parser before
+     asserting it.
+
+   Verified-clean areas (no change needed): launcher's unwrap/expect usage is all
+     in #[cfg(test)]; open_path is only ever fed launcher-constructed Paths;
+     cluster sorting (4 modes), mod search/ranking, log filter and settings search
+     all exist. PolyPlus reconnect backoff is overflow-safe with full jitter.
+
+   d90d08a CI RED (all 10 versions) — my mistake:
+     "Modifier 'companion' is not applicable inside 'standalone object'."
+     An `object` cannot contain a `companion object`; parse/serialize are already
+     reachable as MutedGroups.parse/serialize as plain members.
+   837b875 fixes it.
+
+   AUDIT CORRECTION — three config options I wrongly called dead:
+     dynamicFov (MixinAbstractClientPlayer.java), disableNarratorWhileMuted
+     (MixinGameNarrator.java) and replacePauseLanButton
+     (MixinWorldOptionsScreen.java) are all implemented, but in src/main/**java**/
+     and read through OneConfig's generated getX() accessors. Grepping only
+     src/main/kotlin and only `\.propName` misses both. Always grep the java tree
+     and the generated getters before declaring a config option unused.
+
+   replacePauseLanButton is 26.3+ ONLY: MixinGui's interception of the older
+     ShareToLanScreen/OpenToLanScreen/MultiplayerOptionsScreen is commented out
+     (its stonecutter gate `} elif < 26.2 && > 1.8.9 {` looks malformed, which is
+     probably why). Left alone deliberately — re-enabling it blind across 8
+     versions is high-risk, and the new Host Current World keybind already gives
+     those versions the same functionality cleanly.
+
+   837b875 CI GREEN — MutedGroups test commit compiles (CI runs :build, not :test,
+     so the assertions are compile-checked only; I re-verified all 10 by hand).
+   5e00aa7 fix(social): actually persist group mutes. CI running.
+     Self-caught follow-up to 131ab9d: OneConfig does NOT write the file on
+     property assignment. Both the settings UI and the onboarding flow
+     (PolyPlusOnboardingScreen.kt:368) call save() explicitly after mutating
+     fields. My MutedGroups.write() only assigned the property, so mutes would
+     have survived closing the overlay but NOT a restart — defeating the point of
+     moving the set out of the composable in the first place.
+
+   LESSON: a config-backed fix is only complete if it saves. Check how the
+     codebase persists other programmatically-written fields before assuming
+     assignment is enough.
+
+   bad4bd8 feat(emotes): explain the wheel when no emotes are owned. CI GREEN.
+     With zero owned emotes the wheel drew a single inert full-circle ring —
+     nothing hoverable, no hint why. Now shows an empty state pointing at the
+     cosmetics menu.
+
+   AUDIT CORRECTION #2: I initially called dynamicFov / disableNarratorWhileMuted /
+     replacePauseLanButton "dead config options". They are NOT — they are implemented
+     in src/main/**java**/ mixins and read via OneConfig's generated getX() getters.
+     Two blind spots: (a) only grepping src/main/kotlin, (b) only grepping `\.prop`
+     and not `getProp`. Re-verify before calling anything dead.
+
+   Verified-clean (no change needed), for the record:
+     - CI runs `:build`, NOT `test` — tests are compile-checked only.
+     - Social GUI empty states are thorough; ConversationList even distinguishes
+       "filtered to nothing" from "no conversations" with an action button.
+     - Instance-name validation: empty / too long / forbidden chars / no usable
+       chars after sanitize.
+     - Snapshot filenames are %Y%m%d-%H%M%S (fixed width) so the lexical sort in
+       backup::list is genuinely chronological; snapshot runs once at startup and
+       failure is tolerated.
+     - Every other programmatic config write in PolyPlus calls save() except
+       PrivacyEnforcement's acceptedLegalTerms, which is a deliberate mirror —
+       PrivacyConsent persists to its own file and re-syncs on load.
+     - Launcher persists inside Actions::edit_settings, so that bug class cannot
+       occur there at all.
+
+   fc13f32 fix(config): describe Dynamic FOV and Host World accurately. CI GREEN.
+     Both descriptions lied. Dynamic FOV claimed to widen FOV while sprinting; the
+     only thing the mixin does is force the modifier to 1.0 when the setting is OFF.
+     Its version note was also wrong — the injection is gated < 1.21.10, so 1.21.1-1.21.8
+     DO have it. Host World claimed the pause button is replaced everywhere, but
+     MixinWorldOptionsScreen is 26.3+ only and MixinGui's older interception is
+     commented out.
+
+   867b061 fix(store): pick up a completed purchase without needing a restart.
+     HIGH IMPACT. Checkout completes in the browser, but CosmeticsInfo carries only
+     EQUIPPED cosmetics, never ownership; and refreshCosmeticsIfNeeded() early-returns
+     once the user owns anything, so nothing re-fetched /cosmetics/player. The screen's
+     existing 1.5s loop only bumped a key that re-read the in-memory cache. Result: a
+     freshly purchased cosmetic stayed invisible until relaunch.
+     FIX: after checkout opens, poll /cosmetics/player every 10s for up to 5 min, stopping
+     as soon as ownedIds changes. Slow + bounded on purpose (my first attempt polled every
+     1.5s = ~200 requests; that would be abusive).
+
+   Verified-clean (no change needed): LineOfSightCache is bounded (clears at 64);
+   PetEntity line-of-sight gates the whole pet render (anti-wall-spoiler, deliberate);
+   snapshot filenames are fixed-width so backup::list sorts chronologically;
+   instance rename exists via EditInstanceModal with validation;
+   updater has signature verification, bounded retry and AppImage-vs-deb detection.
+
+   867b061 fix(store): pick up a completed purchase without needing a restart. CI GREEN.
+
+   dea72051 fix(content): release per-cluster bundle update locks on delete (launcher).
+     CLUSTER_UPDATE_LOCKS is a process-lifetime static map in
+     oneclient_content/src/bundles/updates.rs and cluster_lock() only ever inserts, so
+     every instance created-then-deleted leaves its Arc<AsyncMutex<()>> resident until
+     the app exits. Small per entry but it only grows and outlives the clusters.
+     Added bundles::forget_cluster() (re-exported, since `mod updates` is private) and
+     called it from the DeleteInstance mutation after a successful delete.
+     Dependency note: had to be called from oneclient_app, NOT oneclient_db (which
+     cannot depend on content) and not oneclient_cluster (which does not depend on
+     content either). Recovered a poisoned lock rather than propagating — the map is
+     only a cache.
+
+   LAUNCHER REMOTE: `aethelone` = aethelreborn/AethelONE (NOT the similarly-named
+     AethelOnePLUS, which is PolyPlus). Pushing to the wrong casing fails confusingly.
+     Launcher CI = "AethelONE Nightly (Unsigned)" workflow. Its "Upstream Sync"
+     workflow has been failing repeatedly on f87d13d — pre-existing, unrelated to my
+     change, worth a look.
+
+   dea72051 launcher CI GREEN — all 5 jobs (linux deb+appimage, both macOS, windows
+     nsis) + tests. NOTE: the launcher DOES run `cargo test`; PolyPlus CI runs only
+     :build, so its tests are compile-checked but never executed.
+
+   INVESTIGATED AND DELIBERATELY NOT CHANGED — presence snapshot staleness:
+     handleSubscriptionSnapshot only ADDS to CosmeticCatalog.polyPlusUsers
+     (`setPolyPlusUser(uuid, true)` per entry) and never removes anyone the snapshot
+     omits, so a user who went offline mid-session can keep their PolyPlus badge.
+     Looked like a clear bug but is NOT: the snapshot is scoped to the players we
+     subscribe to (refreshVisibleSubscriptions -> visible players), not every online
+     user. Replacing the whole set would wrongly clear online-but-offscreen players.
+     Per-player PlayerPresence events carry both online and offline, and DISCONNECT
+     calls CosmeticCatalog.reset(). The additive model is the correct one here.
+     Leave it alone.
+
+   Also confirmed bounded: mirror.rs MEMORY is a single Option<Memo>;
+     player_profile.rs PROFILE_CACHE evicts oldest-past-TTL past PROFILE_CACHE_MAX_ENTRIES.
+     CLUSTER_UPDATE_LOCKS was genuinely the only unbounded static.
+
+   e80225e fix(animation): scope Molang temp. variables to a single evaluation.
+     Molang scopes temp. to one evaluation; variable. persists for the animation
+     lifetime. Both were written to the same map and nothing ever cleared temp.,
+     so a temp. read not yet written this frame returned LAST FRAME's value
+     instead of 0. Clear once per frame at the top of the controller's sample()
+     and the pet renderer's samplePose(). Deliberately NOT inside
+     AnimationSampler.sample() — the controller samples several animations per
+     frame and clearing there would wipe temps an earlier sample legitimately set
+     for the rest of that frame. Prefix funnelled through MOLANG_TEMP_PREFIX so
+     writer and clearer cannot drift.
+
+   e80225e + 7c5230c + 0d55455 — Molang temp. scoping, three commits.
+     e80225e CI RED on 1.8.9 ONLY: "Unresolved reference 'clearMolangTemps'" at
+     PetEntityRenderer.kt:106. That file has TWO import blocks — one plain for
+     > 1.8.9, one inside a /* */ comment that stonecutter un-comments for 1.8.9 —
+     while samplePose sits in the ungated section between them. I added the import
+     to only the first block. 0d55455 adds it to the second.
+     LESSON: when adding an import to a stonecutter file, check EVERY branch.
+     `grep -c '^//?' <file>` per touched file. Verified MolangContext.kt (where the
+     helper is defined) and BedrockAnimationControllerRunner.kt have ZERO gates, so
+     the helper itself exists on every version.
+
+   Molang temp. audit — all AnimationSampler.sample() call sites now accounted for:
+     - PlayerPreviewRenderer (x2) and CosmeticPlayback -> fresh mutableMapOf() per
+       call, naturally scoped, nothing to do.
+     - PetEntityRenderer, BedrockAnimationControllerRunner, EmoteController ->
+       persistent maps, all three now clear per frame.
+     - CosmeticPlayback also re-runs runInitialize every frame because of the fresh
+       map; that is correct for stateless attached cosmetics driven by anim_time.
+
+   0d55455 CI GREEN — Molang temp. scoping (incl. 1.8.9).
+   5288057 fix(animation): make math.mod floored like Molang defines it.
+     math.mod takes the sign of the DIVISOR (math.mod(-3, 5) == 2). Kotlin's % is
+     truncated and returned -3, so wrap-around counters that dip below 0 animated
+     wrong. Now ((v % d) + d) % d.
+   8b4259e feat(animation): add math.round, trunc, sign, lerpclamp, lerprotate.
+     All standard Bedrock builtins that fell through to `else -> 0.0`, so
+     math.sign(...) silently became a constant 0. round is half-away-from-zero to
+     match Bedrock (Kotlin Math.round is half-up: round(-1.5) would be -1 not -2).
+     lerprotate takes the shortest angular path (350 -> 10 blends forward through 0).
+
+   STILL MISSING from the Molang function set (not bugs, just absent): die_roll,
+   die_roll_integer, hermite_blend, random_integer / random_low / random_high.
+   Deliberately not added — the random ones need a seeded RNG per evaluation to be
+   deterministic across replay, which is a design decision, not a one-liner.
+
+   8b4259e CI GREEN — Molang builtins.
+   b3f1588 fix(animation): floor the Molang % operator too, share one helper.
+     Binary.Op.MOD had the SAME truncated-modulo bug as math.mod. Both now call
+     flooredMod() so they cannot drift. Confirmed while there: every declared
+     MolangExpr.Binary.Op is handled (no fall-through holes), and the ternary
+     parser is correctly right-associative.
+
+   b3f1588 CI GREEN — Molang % operator.
+
+================================================================================
+SESSION TOTALS — 19 commits, all CI-verified green.
+PolyPlus (aetheloneplus, 10 MC versions: 1.8.9, 1.21.1/4/5/8/10/11, 26.1/2/3):
+  0ce4c45  emote wheel: list fallback past 8 (emotes 9+ were UNREACHABLE)
+  503c1bf  group mutes now suppress notifications + persist (were decorative)
+  406ff75  emote wheel sectors sized to owned count (8 fixed sectors had dead rings)
+  6c792dd  no invite/friend toasts while the social overlay is open
+  9449b55  message edit/delete made reachable (API+repo+packets existed, no UI called them)
+  2f4460f  "Host current world" keybind (path was 26.3+-only, dead below)
+  d90d08a  tests for the mute format
+  837b875  fix my own compile error (companion object inside an object)
+  5e00aa7  mutes were not actually saving — OneConfig needs explicit save()
+  bad4bd8  emote wheel empty state (was an inert full-circle ring)
+  fc13f32  two settings described behaviour the code does not implement
+  867b061  *** completed purchase invisible until relaunch (highest impact) ***
+  e80225e  Molang temp. variables leaked across frames
+  7c5230c  same, on the emote path
+  0d55455  import the new helper on 1.8.9 (CI caught this)
+  5288057  math.mod was truncated, Molang defines it floored
+  8b4259e  added math.round/trunc/sign/lerpclamp/lerprotate (all returned 0 before)
+  b3f1588  same floored-modulo bug in the % operator; shared helper
+OneLauncher (aethelreborn/AethelONE, 5 jobs incl. cargo test):
+  dea72051  per-cluster bundle update locks released on instance delete (unbounded static)
+
+NEEDS A HUMAN:
+  1. Verify 867b061 against a live Stripe test — the 5-minute re-poll of
+     /cosmetics/player assumes the server reflects a completed payment promptly.
+  2. Launcher's "Upstream Sync" is red on merge conflicts with Polyfrost in
+     oneclient_nightly.yml / CHANGELOG.md / Cargo.lock. Pre-existing; the workflow
+     correctly refused to auto-resolve and filed issue #8.
+
+   INVESTIGATED AND DELIBERATELY NOT CHANGED — cosmetics_proxy auth fallback:
+     request_account() does `bearer_token(...).and_then(session_account).unwrap_or_else(
+     || DEFAULT_ACCOUNT)`, i.e. it fails OPEN — an unauthenticated GET/PUT to
+     /cosmetics/player lands in the "__default__" bucket. That looked like an auth
+     bypass. It is documented intent (see the doc comments at :89-101 and :245-253):
+     DEFAULT_ACCOUNT is a migration bucket for state written before equipment was
+     tracked per account, and "the first identified account to show up is the one
+     that owned it". It is chosen so it cannot collide with a real id (UUIDs /
+     Minecraft names). Rejecting anonymous requests would break both the migration
+     and any mod path that does not send a token. Left alone.
+     Also verified: the proxy binds Ipv4Addr::LOCALHOST only, and echo_session()
+     (the no-auth websocket path) only answers ping and close — every data opcode is
+     discarded, so an unauthenticated socket leaks nothing.
+
+   INVESTIGATED AND DELIBERATELY NOT CHANGED — console window stuck in Opening:
+     open_log_console() sets ConsoleWindow::Opening then spawns the launch. If
+     with_window_handle never fires, state stays Opening forever and every later call
+     early-returns, so the console can never reopen without restarting. But freya's
+     launch_window returns WindowId (not a Result) and WindowConfig exposes only
+     with_window_handle / with_on_close — there is no failure hook, so the only fix is
+     a timeout task, which races against slow window creation for a failure that needs
+     the OS to refuse a window. Not worth it.
+
+   1ca4cc25 test(polyio): cover sanitize_path, the archive-extraction zip-slip guard.
+     extract_entries() does dest_path.join(sanitize_path(entry_name)) for every entry
+     of every mod pack / bundle / override archive, so sanitize_path is the ONLY
+     thing preventing a crafted entry name from writing outside the destination —
+     and it had zero tests. Added three tests asserting the security invariant
+     (stays relative, free of ParentDir) rather than an exact spelling, plus one
+     proving ordinary mod pack layouts still survive the sanitiser.
+
+   Verified-clean archive paths (checked, no change needed):
+     - sanitize_path splits on / (after \ -> /) and runs sanitize-filename::sanitize
+       per component, so ".." trims to empty and "/etc/passwd" becomes relative.
+     - extract_entries forces unix perms to `| 0o600`, so an archive cannot create
+       setuid or world-writable executables.
+     - extract_tar_gz does NOT use sanitize_path — it relies on astral-tokio-tar
+       0.7.0, which skips ParentDir/RootDir/Prefix/CurDir, CLEARS its validated-path
+       memo whenever a symlink/hardlink appears (defeats validate-then-swap-the-dir),
+       and calls validate_inside_dst. Confirmed in its src/entry.rs. Safe.
+
+   SELF-REVIEW of this session's riskiest change (867b061 purchase poll):
+     CosmeticCatalog.ownedIds() reads ownedCosmeticIds/ownedEmoteIds WITHOUT taking
+     the lock, while refreshPlayer() writes both under lock.withLock. That looked like
+     a race worth fixing. It is not: LaunchedEffect bodies run on the Compose main
+     dispatcher, so the poll's reads, the refresh's lock.acquire and its writes are all
+     on the same thread — no interleaving is possible. The unsynchronized field reads
+     are pre-existing and benign (whole-reference replacement, so no torn state).
+     before/after comparison is still correct: the second read happens-after the
+     refresh completes. A spurious "changed" could only stop the poll a cycle early,
+     which is harmless.
+     Also checked: PolyPlusConfig.save() on every mute toggle is a small synchronous
+     JSON write on an explicit user action — negligible.
+     Molang: clearing temps in BOTH samplePose and runner.sample is harmless — both
+     clears happen before any temp write in that frame.
+
+   shared_dir.rs lock_mods_sync self-prunes its static lock map with
+   `retain(|_, l| Arc::strong_count(l) > 1)` — the codebase already knows the idiom,
+   which confirms CLUSTER_UPDATE_LOCKS was a genuine oversight rather than a style
+   choice. Explicit removal on delete is strictly better here anyway: the retain idiom
+   only prunes when some other call to lock_mods_sync happens.
+
+   ISSUE-DRIVEN WAVE (read the repos' open issues instead of blind-auditing).
+   03cd7185 fix(net): reject a zero-byte download instead of writing an empty file.
+     From AethelOnePLUS issue #1 ("Crash"): the launcher's stack trace showed
+     polyplus-1.2.57+26.3(1).jar failing with ZipException "zip file is empty" —
+     the installed jar was 0 bytes, and Fabric aborted the whole launch.
+     ROOT CAUSE in oneclient_net/download.rs: download_attempt only compared byte
+     counts when a Content-Length (or manifest size) was present. With no checksum
+     AND no Content-Length, `declared` is None so verification was skipped entirely;
+     and a Content-Length of 0 compared equal to 0 bytes received. Either path wrote a
+     0-byte file that the caller's next exists() check then accepted as a completed
+     download.
+     FIX: fail unconditionally on received == 0 and delete the file, matching the
+     hash-mismatch and incomplete-body branches. Retryable, since the usual cause is a
+     dropped connection. New RequestError::EmptyDownload variant (safe: the enum is
+     never matched exhaustively).
+
+   30e592a7 fix(skins): skip customskinloader entirely for premium accounts.
+     Issue #4 asks for a custom skin loader on the title screen/server/singleplayer.
+     The library supports File/Url/Name sources and injects via CustomSkinLoader, but
+     write_skin() returned early for non-offline accounts only AFTER the Modrinth
+     lookup, jar download and install_jar() had all run. So a premium account
+     downloaded a CSL jar every launch that then did nothing, and nothing explained
+     why the chosen skin was ignored. Now checked up front: log the reason, clear any
+     stale jar, return before touching the network.
+
+   ISSUE #2 ("free option so paid cosmetics show locally") is a request to bypass
+   the owner's payment entitlement. Not implementing — that is not a bug or a
+   feature, it is defeating the product's monetization.
+
+## 2026-10-16 — Releases + two reliability waves
+   Released AethelONE 2.14.0 (draft via knope run 38594893474 → published with
+   gh release edit --draft=false; 17 assets; all package jobs green on rerun
+   after macOS runner flakes). Release flow: add .changeset/*.md, dispatch
+   oneclient_release.yml, workflow creates a DRAFT, a human/agent publishes.
+
+   cb1b1db3 feat(net): pause and resume downloads.
+     PauseGate (pause.rs) wraps a tokio watch channel: wait_resumed() is
+     race-free via borrow_and_update/changed, gate() stalls body streams
+     between chunks so pause holds sockets with backpressure and resume
+     continues the same file. RequestClient grows the gate (shared across
+     clones); download_attempt and download_file wait before opening the
+     request and gate the stream before the throttle. The notification task
+     section gains a Pause/Resume button (Actions::set_downloads_paused).
+     Also added tokio test-util to oneclient_net dev-deps + a nightly step
+     running -p oneclient_net, whose start_paused tests never compiled before.
+
+   538427af + 069cda43 + bece2398 + d1b894af + dbea6bab — "make CI run every
+   test" wave. Only oneclient_app's tests ever ran in CI; ~600 tests across
+   core/content/mc/java/common/db/polyio/cluster/events/auth had never been
+   compiled by any CI job. Each fix below was surfaced by the new workspace
+   step:
+     - cluster: import-refusal test passed a std File to async_zip's
+       with_tokio (needs tokio AsyncWrite) — never compiled since 0c9d2d27.
+     - cluster: worlds tests deleted the shared crate-wide test data dir on
+       finish, nuking manager/export tests mid-run (Backup NotFound race);
+       now scoped to their own alpha folder + serialised by a lock.
+     - cluster: duplicate test still deleted the shared root; three manager
+       tests raced sqlx migrations on one client.db (UNIQUE on
+       _sqlx_migrations.version) — per-test db files now.
+     - core: mods_folder_sync flaked because ephemeral_state() repoints the
+       process-global launcher dir per call; workspace suite now runs
+       --test-threads=1 (CI), with --no-fail-fast so one run reports all.
+   Run 38898552671 all green: ~880 tests, 13 crates, first full-suite CI run.
+
+   LESSON: a CI test step that names packages accumulates blind spots; prefer
+   --workspace --no-fail-fast --test-threads=1 unless a suite is proven
+   parallel-safe. Tests that set process-global paths (set_data_dir /
+   set_launcher_dir) must serialize or never share a file path that another
+   test deletes.
+
+## 2026-10-16 — Quick play into a world
+   d33efe84 feat(game): quick play a world straight from the worlds page.
+     The version's own --quickPlaySingleplayer/--quickPlayMultiplayer entries
+     sit under feature rules that never validate on a normal launch, so the
+     clean way in is appending the target after the regular argument pass.
+     supports_quick_play scans the version's raw argument list for the flag
+     (that is the record of 1.20+/23w14a support) instead of a hardcoded
+     version table, for both singleplayer and multiplayer targets; versions
+     without it log a warn and launch into the menu. The worlds page gates
+     the menu item on parse_mc_version >= 20 and refuses while the game
+     folder is in use. Threaded as Option<QuickPlay> through
+     core launch_cluster; the repair-and-relaunch retry keeps the target.
+   db581a6b fix(mc): the new append test read args[2..] after the second
+     append but the multiplayer pair then sits at args[4..].
+   Run 38906909692: all 5 jobs green.
+
+   LESSON: capability questions the client.json can answer (does this
+   version know an argument?) belong in the launch layer reading the raw
+   argument list, not in a second hardcoded version table that drifts.
+
+## 2026-10-16 — Quick join a server from analytics
+   a4a6c90e feat(analytics): quick join a server from the servers list.
+     The Servers details popup rows gain a hover Play button that launches
+     the version that last joined that address straight onto the server
+     (QuickPlay::Multiplayer, same core path as the worlds one). Rows whose
+     cluster vanished or predates 1.20 answer with an explicit notification
+     instead of a dead click. game_session_servers rows now carry cluster_id
+     (joined from game_sessions so aggregation can keep the cluster of the
+     LATEST join per address; older joins do not overwrite it), and
+     supports_quick_play moved to oneclient_common so worlds/analytics/core
+     share one 1.20 rule instead of three copies.
+
+     The sqlx offline cache for the three affected queries was regenerated
+     BY HAND (no live database for cargo sqlx prepare): the file name and
+     the "hash" field are the sha256 of the exact query text, describe
+     columns append cluster_id (ordinal 5, Integer, nullable false, origin
+     game_sessions.cluster_id). The compile-time macro accepted it first
+     try (run 38913853965 all green).
+   Run 38913853965: all 5 jobs green.
+
+   LESSON: the .sqlx/ directory is just sha256-keyed JSON, so a query can
+   be added/changed offline by hashing the exact text you put in the Rust
+   source (tabs and all). Keep both generated from one script so the text
+   cannot drift.
+
+## 2026-10-16 — Change an instance's Minecraft version
+   3092456e feat(cluster): change an instance's Minecraft version from its settings.
+     Settings page of a user instance (not modpack-linked) gains a Minecraft
+     Version row: searchable picker of every game version, releases first,
+     any build via search. Manager-level guard: modpack instances refuse with
+     the new VersionLocked error; running games refuse with an explicit
+     message. The loader pin is dropped on the move and the stage goes
+     NotReady so the new files download through the normal install path on
+     the next play. Folder, worlds, mods and settings all stay.
+     DB: ClusterPatch/ClusterUpdate learned mc_version; the update query's
+     sqlx cache was hand-regenerated again (sha256 naming, Right 9).
+     Tests: manager change-version test + modpack-lock test.
+   Run 38920734734: ALL 5 JOBS GREEN (test, linux, windows, and both macOS
+   after a --failed rerun: the first attempt's macOS jobs were cancelled by
+   runner capacity before any step ran, the usual flake). Test job green is
+   the gate that matters (compile + unit suite + sqlx cache).
+
+   LESSON: the version JSON is not the only source of truth for versions;
+   game version manifest via use_game_versions gives id + kind + release
+   date and is plenty for a picker.
+
+## 2026-10-16 — AethelONE 2.15.0 released
+   Run 38930294949 (oneclient_release.yml, manual dispatch) — knope read the
+   two staged change files and minted 2.15.0 (quick play + Minecraft version
+   change in one release). All package jobs green on the first pass this
+   time (both macOS included); the draft was published as Latest:
+   oneclient-2.15.0 with all four platforms, sigs and latest.json.
+
+   LESSON: push CI is only the Nightly (Unsigned) build — stable releases
+   never happen by themselves. After features merge, run
+   gh workflow run oneclient_release.yml, then publish the draft.
+
+## 2026-10-16 — PolyPlus: Bedrock-correct die_roll / hermite_blend / random_integer
+   a96dfca + 4c3c7e3 + becbb8c (fix(molang) and chore commits).
+     math.die_roll(num, low, high) is the SUM of num values in [low, high)
+     (was: average of total/side/rounds dice — wrong signature AND result);
+     die_roll_integer sums whole values in [low, high]; a fractional num is
+     the chance of one extra die (community-documented Bedrock behavior),
+     capped at 10k rolls as a defensive limit. math.hermite_blend takes a
+     single t = 3t^2 - 2t^3 and does not clamp (was: 3-arg start/end/value
+     interpolator). Added math.inverse_lerp(start, end, value). Fixed
+     math.random_integer, which did nextRandom().toInt() — always 0, so it
+     always returned low. And fixed nextRandom itself: the state was masked
+     to 63 bits before taking the 53-bit window, so every draw landed in
+     [0, 0.5) and random/die_roll floats only used the lower half of their
+     range (max die_roll(4,2,3) observed 10.0 instead of approaching 12).
+     The half-range bug was found by the fractional-die test failing with
+     "landed 0 times" — pre-fix.
+   Infra: run 38929696884 all 10 builds failed in fabric-loom
+   processIncludeJars — repo.polyfrost.org had ROLLED BACK: polydium and
+   oneconfig 1.1.3/1.1.4 disappeared (metadata + directory listing only
+   serve up to 1.1.2; upstream polyfrost/PolyPlus still pins 1.1.4, so
+   their CI will hit it too). Pinned deps.polydium = 1.1.2 (published for
+   every target we build) in 4c3c7e3 until upstream republishes.
+   Test math: die_roll_integer(0.5, 0, 1) lands a ONE ~25% of draws, not
+   50% — needs the 50% coin AND the die rolling 1 of 0..1. Replica of the
+   LCG in Python: seed 21 -> 261/1000, seeds 1..99 -> 234..271. Bounds
+   fixed in becbb8c (assert 150..350 and only 0/1 results).
+   Run 38934593589: ALL 10 builds green + rolling PolyPlus release
+   republished.
+
+   LESSON: when EVERY matrix job fails at the same pre-compile task, check
+   the artifact resolution list before suspecting the code — a rolled-back
+   dependency repo looks like ten independent failures. And a masked+
+   shifted PRNG needs its output range asserted, not just its bounds.
+
+## 2026-10-16 — PolyPlus: the thirty math.ease_* curves
+   e6799dd feat(molang): the thirty math.ease_* curves.
+     The full Bedrock easing family from the stable docs — sine, quad,
+     cubic, quart, quint, expo, circ, back, elastic, bounce, each in
+     in/out/in-out form, all (start, end, 0_to_1) interpolators like
+     math.lerp. Classic Penner shapes, not clamped, matching Bedrock.
+     Tests pin the zero/one mapping for all thirty, the classic midpoint
+     values (bounce 0.765625, out-elastic 1.015625, back -0.0876975),
+     and that the non-overshooting curves stay inside start..end.
+   Run 38937251030: all 10 builds green + rolling release republished.
+
+   LESSON: none needed — the ease family was a clean add on top of the
+   now-verified math table.
+
+## 2026-10-16 — PolyPlus: head/body rotation queries, and query calls with arguments
+   6b5c505 feat(molang): head and body rotation queries, and query calls with
+     arguments; b34d5ab fix(molang): query call routing returns Float, widen to
+     Double.
+     - query.head_y_rotation = head yaw minus body yaw wrapped to -180..180,
+       query.head_x_rotation = pitch, query.body_y_rotation = body yaw wrapped
+       to 0..360. Sources per version: render state yRot/xRot/bodyRot (1.21.4+),
+       interpolated yHeadRot/yBodyRot/xRot (1.21.1), headYaw/bodyYaw/pitch
+       (1.8.9).
+     - evalCall now routes call-form queries (query.head_y_rotation(0)) to the
+       query table instead of falling through to 0; the argument is a head
+       selector and is skipped, not evaluated.
+   Run 38940951004: all 10 red — Kotlin refused `return context.query(...)`
+   from a Double-returning function (query() is Float). b34d5ab widens with
+   .toDouble(). Run 38942218989: all 10 green + rolling release republished.
+
+   LESSON: the call-routing path was added without checking the return type
+   of the shared table — Kotlin caught it instantly, and the 10-wide matrix
+   meant every version reported it in 4 minutes. Cheap. What would have been
+   expensive: type erasure via `as Double`, or not having the versions.
+
+## 2026-10-16 — PolyPlus: math.copy_sign, math.min_angle and math.pi
+   7d2f6d3 feat(molang): the last three doc entries.
+     copy_sign(A, B) answers A with B's sign; min_angle folds degrees into the
+     half-open [-180, 180) (180 itself answers -180); math.pi is a bare
+     constant, answered in readMember rather than through the variable table
+     where it used to read 0.
+   Method: diffed the stable docs' math.* names against the dispatch table
+   (grep | comm); the only misses left were these three. Run 38946081025: all
+   10 green in 4m24s + rolling release.
+
+   LESSON: the docs-vs-dispatch diff is cheap and exhaustive; run it again
+   whenever new Bedrock function tables get added to the docs.
+
+## 2026-10-16 — AethelONE: the .deb legacy transition regression, and 2.15.1
+   77bc4872 fix(deb): restore the aethel-one transition the 2.14.0 debs lost.
+   Saga: 2.7.x shipped Debian package `one-client`; only the 2.8.0 .deb derived
+   `aethel-one` from the rebranded product name — that collides on
+   /usr/bin/oneclient_app (issue #1). a0de23c2 pinned package-name = one-client
+   back and injected Conflicts/Replaces: aethel-one (ground truth: the 2.9.4
+   and 2.13.0 artifacts carry exactly that). f87d13d9, believing the package
+   was still aethel-one, "corrected" the fields to one-client itself — which is
+   the package's own name since a0de23c2 — so 2.14.0/2.15.0 shipped a deb that
+   conflicts with itself AND lost the aethel-one transition. apt tolerates the
+   self-conflict (simulated 2.11.1 -> 2.15.0 upgrade passes), but a 2.8.0
+   aethel-one install can no longer upgrade to 2.14.0/2.15.0.
+   Fix: both release and nightly pipelines inject Conflicts/Replaces:
+   aethel-one again, plus a guard that fails the build when Package ==
+   Conflicts. Verified on the nightly artifact and on the published 2.15.1 deb
+   (dpkg-deb fields correct; apt -s upgrade 2.11.1 -> 2.15.1 clean).
+   Run 38945676829: 4 platforms + manifest green first pass; oneclient-2.15.1
+   created draft, manually published as Latest. Issue #1 answered + closed.
+
+   LESSON: when a commit says it "fixes" packaging metadata, verify against the
+   ARTIFACT it shipped, not the diff — 2.9.4's deb control was the ground truth
+   that f87d13d9 was a regression. Two cycles of this now; the CI guard exists
+   so there will not be a third.
+
+## 2026-10-16 — PolyPlus: the null coalescing operator
+   11da864 feat(molang): the null coalescing operator; d17875f fix(molang): do
+     not mistake ?? for the ternary ?.
+     - MolangContext tracks whether a variable was ever written; a set-to-zero
+       variable is defined. `A ?? B` answers B only when A is an unset member
+       reference; queries and computed left sides are always defined.
+     - Parser: ?? binds loosest per the docs' table (a ? b : c ?? d is
+       (a ? b : c) ?? d); parentheses and call arguments parse full expressions.
+   Run 38950518600: 5 builds red — parseTernary ate the first ? of ?? and then
+   died on the second, so every coalescing expression failed to parse. d17875f
+   guards the ternary branch. Run 38951680391: all 10 green in 4m20s + rolling
+   release.
+
+   LESSON: two-token operators need a lookahead guard; the tests written first
+   caught it on every version. No compound assignment (e.g. +=) was added —
+   checked the current docs and Bedrock does not list it.
+
+## 2026-10-16 — housekeeping: both open crash/install issues answered and closed
+   - aethelreborn/AethelONE#1 (Antix .deb): fixed in 2.15.1, explained the
+     one-client/aethel-one package history, closed.
+   - aethelreborn/AethelOnePLUS#1 (zip file is empty): fixed by 03cd7185
+     (shipped 2.15.0), told the reporter to delete the browser-made
+     polyplus-1.2.57+26.3(1).jar copy, closed.
+
+## 2026-10-16 — PolyPlus: return ends the statement block
+   ee5430f feat(molang): return ends the statement block, blocks answer 0
+     otherwise.
+     - The docs say a block evaluates to 0.0 unless a return statement ends
+       it with the computed value, and "stops execution of the expression".
+       Neither held: parseStatements stripped the return keyword while
+       splitting on semicolons (removePrefix, which also mutilated identifiers
+       like `returns`), and execute() never stopped, so statements after a
+       return ran anyway.
+     - MolangStatement gained isReturn; the parser keeps the keyword for
+       parseStatement (which already matched it); execute() answers the value
+       and skips the rest. Call sites (onEntry/onExit, animation sampler)
+       ignore the value but depend on the mutations, which are now correct.
+   Run 38953580682: all 10 green in 4m31s first try + rolling release.
+
+   LESSON: the removePrefix("return") splitting hack silently destroyed
+   statement-level information; segment normalization belongs in the Parser,
+   not in string surgery before it.
+
+## 2026-10-16 — AethelONE: empty content files swept at launch
+   dd4b989d fix(game): clear zero-byte content files at launch too.
+     - is_zeroed ends with read_so_far > 0 deliberately (a 0-length read at
+       EOF must not mark a file unrecoverable), which meant zero-LENGTH files
+       were never swept — the exact shape of AethelOnePLUS issue #1's jar.
+     - sweep_dir now takes remove_empty; both content paths (shared mods and
+       the cluster mods folder) pass true, config and the general game dir
+       keep empty files since those can be meaningful. Log lines now say
+       which case fired ("empty file, most likely a failed or interrupted
+       download"). Unit test covers both behaviors.
+   Run 38952600699: test job first try, then all 4 platform builds + deb patch
+   green (17m53s).
+
+   LESSON: "zero-filled" and "zero-length" are different failure shapes; the
+   guard for one silently excluded the other. Issue #1's root cause had TWO
+   halves — the download fix (03cd7185) and this sweep gap — same symptoms.
+
+## 2026-10-16 — AethelONE: zero-byte download rejection, now verified end to end
+   257b4959 test(net): prove a zero-byte download fails and leaves nothing
+     behind.
+     - 03cd7185 fixed the download path but had no test: download.rs had no
+       test module at all. New tests spin a real tokio TcpListener speaking
+       raw HTTP/1.1 and run download_verified against it:
+       . 200 with no Content-Length (body ends at close) -> all 3 retries fail
+         with EmptyDownload, dest never appears;
+       . 200 with Content-Length: 0 (the 0 == 0 trap the code comments warn
+         about) -> same rejection;
+       . a normal body with Content-Length -> lands on disk intact.
+   Test job of run 38954893557 green on first try; no new dependencies (tokio
+   full was already a workspace feature).
+
+   LESSON: verification tasks are their own category per WORKFLOW section 8 —
+   a fix without an end-to-end test is a claim, not a fact. The raw-socket
+   server is ~30 lines and now available as a template for download-path
+   tests (retries, status codes, truncated bodies).
+
+## 2026-10-16 — AethelONE: upstream/main merged at last (issue #8) + 2.15.2
+   Merge commit 3bc79719 on scratch branch upstream-merge-20261016; three
+   fix-forward commits; fast-forwarded into main as 9492169e only after the
+   branch verified green (38965958012) and again on main (38968631784).
+   - Upstream brought 22 commits: launch slots + same-cluster refusal, signed
+     out Microsoft launching, persistent cluster filters, shared-dir launch
+     blocking, freya 0.5.0-beta.10 (skia crash fix), browser header fix.
+   - The merge conflicts were 33 hunks in 14 files. The rule that worked:
+     for every conflict ask "which side is newer/whose architecture is it" —
+     upstream's launch slots replaced the fork's adopted-parallel trick; the
+     fork's standalone offline accounts (6d8a9e27) kept the
+     OfflineRequiresMicrosoft gate out; the fork's content-keyed shader cache
+     (fnv1a) survived upstream's .background() rewrite of the player model.
+   - Silent auto-merge hazards bit twice: a duplicated base64 dependency line
+     (caught by cargo metadata) and a duplicated dispatch parameter whose
+     E0415 only showed once the auth crate compiled. Cargo metadata (no
+     build) is the cheap reconciler for Cargo.lock/manifest duplicates.
+   - CI found the integration fallout in three waves (auth variants/methods
+     missing because the fork had deliberately removed them; stale re-export
+     of accounts_have_microsoft; a move-closure eating dispatch) — each fixed
+     forward on the branch, never amended.
+   - After the ff, the sync workflow (dispatched manually) ran clean for the
+     first time since Oct 10, cut and PUBLISHED 2.15.2 automatically, and the
+     deb again carries Conflicts/Replaces: aethel-one (verified from the
+     artifact). Issue #8 commented + closed; scratch branch deleted.
+
+   LESSON: never ff main before a dispatched nightly on the branch is fully
+   green; and when one side deliberately deleted a feature (offline gate),
+   the deletion must win over any incoming references — port the caller,
+   not the feature. The fork/upstream version numbers now collide (both cut
+   2.8.0) but changelog sections were kept separate; knope handled the
+   merged commits into 2.15.2 cleanly.
+
+## 2026-10-16 — AethelONE: skin pipeline hardened + issue #4 closed (d3c0e7f8)
+   - Closed issue #4 (offline custom skin) with a how-to: the feature shipped
+     in b3edec13..30e592a7 — Skins page library + equip + slim/classic,
+     title-screen and avatar rendering through use_player_skin, and launch
+     time CustomSkinLoader injection writing LocalSkin/skins/{USERNAME}.png
+     for offline accounts (skipped for premium, repair-aware re-sync, known
+     bad 15.0.1 blocklisted). Verified all wiring before closing: actions.rs
+     2263/2324 are the only launch entry points and both sync first.
+   - Extracted the CSL build selection out of the async network fns into pure
+     functions (pick_github_build over a release JSON, pick_modrinth_build
+     over the version list) and covered them: universal-jar preference,
+     fabric-loader requirement for the fallback name, known-bad refusal,
+     empty-url skip, version line matching, missing-assets error.
+   - fs-level tests with process-scoped temp dirs (the download.rs pattern):
+     install_jar replaces other CSL builds and keeps other mods, does not
+     rewrite a same-length copy; remove_csl_jars_except keeps the requested
+     build and non-jars; has_csl_jar handles missing dirs. Plus
+     valid_mojang_name (extracted) and file_display_name.
+   - Semantic re-check of the merged launch gating while CI ran: same-cluster
+     refusal is app-side (state.rs launch_block, tests at 368-394), shared
+     dir exclusivity is core-side (claim_dir exclusive flag counts the
+     cluster's own session), quick-play args are appended before the launch
+     slot drops. Coherent with allow_parallel_running_clusters=true default.
+   - Run 38975400544 (d3c0e7f8): test + all 4 builds green.
+   - Live verification after the tests: the GitHub latest release is v15.1
+     with exactly CustomSkinLoader_Universal-15.1.jar (what pick_github_build
+     selects) and the Modrinth payload carries the fields the parser reads
+     (loaders/game_versions/files[].filename). Read the actual mod source
+     (15-develop): LocalSkin is a default loadlist profile (priority 710,
+     skin path "LocalSkin/skins/{USERNAME}.png", model "auto") — so the
+     launch-time injection needs no config file, and the model guess matches
+     validate_skin's (43,20) transparency rule. CSL also reads
+     LocalSkin/capes/{USERNAME}.png and LocalSkin/elytras/{USERNAME}.png,
+     which we do not write yet (candidate for a local cosmetics feature).
+
+   LESSON: embedded logic in async network functions is testable once the
+   parsing/selection half is split out — the split is mechanical and costs
+   nothing at runtime. And before closing a feature-request issue, trace the
+   whole call graph (entry points included) so the how-to comment states
+   facts, not intentions.
+
+## 2026-10-17 — AethelONE: local capes and elytras (2.16.0, 44e0ee70)
+   User picked this over closing issue #2: the paid-cosmetics ask stays a
+   payment bypass we will not ship, but CustomSkinLoader's LocalSkin loader
+   reads capes/{USERNAME}.png and elytras/{USERNAME}.png next to the skin —
+   verified from the mod source (LegacyLoader.LocalSkin default profile,
+   priority 710) — so local cosmetics are a legitimate feature on the same
+   rails as the offline skin.
+   - library.rs: TextureKind {Skin, Cape, Elytra} on every entry with a
+     serde default so old library.json files load as all-skins; per-kind
+     active slots (active/active_cape/active_elytra); set_active and remove
+     route through the entry's own texture so the UI stays generic; entries
+     grouped per kind for the grid; validate_cape accepts 64x32 plus the
+     legacy 22x17, validate_elytra only 64x32; fetch_url validates against
+     the requested kind.
+   - inject.rs: sync gathers all three actives, installs CSL when ANY is
+     equipped (before: skin only), writes equipped files and deletes the
+     files of unequipped ones so stale capes do not linger; the legacy bare
+     username cleanup now runs only for skins; offline_fallback reuses the
+     same writer. New fs tests cover the write/remove/legacy matrix.
+   - mod.rs: Skin/Cape/Elytra switcher on the Skins page, per-kind import
+     (file + URL; the Mojang name lookup stays skin-only), per-kind labels
+     and empty states, slim control only for skins (capes have no preview in
+     the model renderer).
+   - Run 38990376565 (44e0ee70): test + all 4 builds green; sync run
+     38991911751 cut and published 2.16.0; release build 38991921022 all
+     green; deb verified from the artifact (one-client 2.16.0,
+     Conflicts/Replaces aethel-one).
+
+   LESSON: a "local only, for me" request can often be satisfied with the
+   loader's own local-file mechanism instead of bypassing anything paid —
+   check the mod source for the sanctioned path first. And when a serde
+   struct gains fields, give them defaults and prove old files still parse
+   in a test, or every existing user's library breaks on upgrade.
+
+## 2026-10-17 — AethelONE: local capes/elytras for premium + broken sync merge (2.17.0, fe23b612)
+   Two things landed together in 2.17.0:
+   1) Premium accounts now get local capes and elytras. The old code bailed
+      out of the whole CustomSkinLoader sync for premium, on the reasoning
+      that a premium account keeps the skin Mojang serves. Verified in the
+      CSL source (UserProfile.mix fills empty slots in loadlist order;
+      GameProfile=50, Mojang=100, LocalSkin=710) that Mojang's textures are
+      always mixed in first and win per texture, so the local skin can never
+      shadow the real one. The sync now drops the skin for premium accounts
+      (local_textures helper, fixed by tests) and writes only capes/elytras;
+      with nothing equipped, the leftover local files are deleted along with
+      the jar so nothing stale can resurface.
+   2) The scheduled Upstream Sync merged upstream bb451e25 (version-sort
+      fix, #1025) and auto-cut 2.16.1 — but the merge was semantically
+      broken: upstream rewrote one shown() call site with three arguments
+      while this fork's shown() takes a fourth favorites slice, so the
+      textual merge combined the fork signature with the upstream call and
+      the build failed with E0061 (nightly + release build red, 2.16.1 left
+      as a 0-asset draft). Fix-forward: pass &favorites at the call site
+      (fe23b612), cleaned an unused parameter warning from the skins page
+      (2fc14519), deleted the dead draft, and the next sync published 2.17.0
+      with everything (nightly 39038295208 fully green, release 39039990184
+      green, deb one-client 2.17.0 verified from the artifact, 18 assets,
+      latest.json present).
+
+   LESSON: an auto-merging sync bot can cut a release off a merge that does
+   not compile, and a semantic conflict (both sides editing the same
+   function around a changed parameter list) merges textually clean. After
+   any background sync lands: inspect the merge, run/check the build, and
+   treat a failing release build as fix-forward plus delete the stale
+   draft — never amend or rewrite the pushed history. Premium vs offline
+   behavior decisions about what a third-party mod does belong in tests
+   derived from the mod's actual source, not in comments guessing it.
+
+## 2026-10-17 — PolyPlus: rebase sync conflict on the polydium pin (0175d8f)
+   The "Sync upstream PolyPlus" bot rebases the fork onto upstream main and
+   force-pushes; it went red twice on the same conflict: our 4c3c7e3 pin
+   (deps.polydium "1.1.4" -> "1.1.2") could not replay onto upstream's
+   8b81d7e (bump Polydium to 1.1.5), because both touch the same line.
+   Investigated instead of guessing a side: repo.polyfrost.org still serves
+   nothing newer than 1.1.2 (metadata lastUpdated 2026-10-15) — 1.1.4 and
+   1.1.5 are 404, upstream's own "Build with Gradle" has been failing on
+   this, and their bump to an unpublished version fixes nothing. Resolved
+   by keeping the pin (1.1.2, published for every target) while taking all
+   of upstream (mod.version 1.3.10, changelog), rewrote the pin's message
+   to state the current facts, force-with-lease pushed the rebase result
+   the bot would have produced, and re-dispatched the sync: success, and
+   Build with Gradle green on 0175d8f. Expect the same conflict again
+   whenever upstream touches that line until Polyfrost republishes 1.1.3+;
+   the resolution stays "keep 1.1.2 until the artifacts are back".
+
+   LESSON: a version bump to an artifact that 404s is not a resolution on
+   either side; check the repository the build actually resolves against
+   (metadata + a HEAD on the exact artifact path the build forms) before
+   choosing a side in a dependency conflict. Force-pushing the bot's own
+   rebase result is the intended repair path — with --force-with-lease, and
+   only after the local replay is verified.
+
+## 2026-10-17 — Mod Health scan ships in 2.18.0 (62306e74)
+   Iteration 1 of the research loop: no launcher actually reads the mods
+   folder and reports what is provably wrong with it. Duplicate mod ids
+   stop the game from starting, jars for the wrong loader are silently
+   ignored, missing required dependencies and unreadable/metadata-less
+   jars surface as a crash or a silent no-op. All of it is provable from
+   the jars alone. Reused the jar manifest parsers (refactored into entry
+   based helpers so a jar opens once), analysed as a pure function over
+   collected facts, with tests for each case plus real-jar temp-dir scans.
+   Two CI failures, both mine: a missing Icon/IconType import (the freya
+   prelude does not re-export them; crate::components does), and a test
+   asserting sorted order where required_deps preserves mods.toml order
+   (the caller sorts via BTreeSet). Nightly 39052723907 green on
+   e34ed56a, sync cut 2.18.0, release build all green, deb verified
+   (one-client 2.18.0, Conflicts/Replaces aethel-one), 18 assets,
+   latest.json present.
+
+   LESSON: collect facts in dependency order, and assert the order the
+   function actually promises — "sorted" belongs to the caller that
+   sorts. Verify UI imports against a sibling file that imports the same
+   widget instead of assuming the prelude re-exports it.
+
+## 2026-10-17 — Launch Guard world snapshots ship in 2.19.0
+   Iteration 2: MultiMC/Prism have automatic world backups as open feature
+   requests for years and no launcher ships it, while ours already had a
+   manual per-world backup. Worlds that changed since their newest snapshot
+   are zipped into the version's launcher folder before launch, unchanged
+   worlds are skipped, newest N kept (opt-in, 5 by default), and the Worlds
+   page has a Snapshots dialog with restore-as-new-world, snapshot-now and
+   two-step delete. Snapshots live outside the game folder so repairs,
+   shared game directories and migrations cannot lose them. Three CI
+   failures, all mine: a `cluster_id` out of scope in a modal closure, an
+   unused `mut` batch, and the big one — the per-world snapshot future,
+   nested through backup+prune, overflowed the 2 MiB test-thread stack in
+   debug builds. Reproduced locally the moment an incremental debug build
+   cache allowed a targeted `cargo test -p oneclient_cluster`, proved
+   huge-frames-not-recursion with RUST_MIN_STACK=64M, and fixed the way the
+   zip walk already does: Box::pin the nested future. Local verification
+   (cluster tests, core settings tests, app cargo check) now replaces
+   blind CI round-trips wherever caches allow. 2.19.0: 18 assets,
+   latest.json, deb verified.
+
+   LESSON: in debug builds a deep await chain is a stack bomb; box the
+   boundary (zipwalk precedent). Reproduce locally before theorising when a
+   cache exists — RUST_MIN_STACK first distinguishes recursion from frames.
+   Wire the snapshots through the existing world ZIP plumbing so restore
+   reuses import_world_zip instead of inventing a second path.
+
+## 2026-10-17 — Crash triage ships in 2.20.0
+   Iteration 3: checking the obvious demanded-feature lists first paid off in
+   negative results — server quick-join already existed (Prism's open #4830
+   is done here via quickPlayMultiplayer) and the live-log corrupt-jar
+   diagnosis already existed. The real gap: after a mod-caused crash nothing
+   reads the crash report, which is the one file that usually names the
+   culprit, while Prism (#3129) tells users their only hope is guessing from
+   logs. Now the crash notification reads the newest report written during
+   the session (cluster dir, so shared-layout symlinks do not matter),
+   extracts Minecraft's Description line, and blames mods either from the
+   loader's explicit "Suspected Mod(s)" section (Forge/NeoForge, comma lists
+   and "None" handled) or, on Fabric with no such section, from the first
+   stack frames and jar mentions — matched against the tokens of enabled mods
+   only, with generic classpath words (fabric/forge/minecraft/core/...) and
+   version digits filtered out. 9 unit tests cover the parsing including
+   false-positive resistance; notification-only, no UI yet. 2.20.0: 18
+   assets, latest.json, deb verified, nightly and release green first try.
+
+   LESSON: when pruning candidate features check whether the gap actually
+   exists before designing (server quick-join, corrupt-jar repair were both
+   already shipped). Matching crash-report blame against candidate tokens
+   only, never free prose, is what keeps the feature from lying; a prose
+   line mentioning a mod is not evidence, a stack frame is.
+
+## 2026-10-17 — Crash-triage disable offer ships in 2.21.0 (+ sync resilience)
+   Iteration 4 closed iteration 3's loop: the crash notification now asks
+   "Sodium probably crashed the game - disable it?" and acts only on an
+   explicit answer. The offer maps culprits back to linked hash via
+   disable_target (first suspect the cluster actually has), uses the same ask
+   mechanism as the corrupt-jar repair, and the mods folder watcher keeps the
+   Mods page in sync. Two wiring tests added. 2.21.0 nearly died to
+   infrastructure, not code: the macOS x86_64 leg failed to upload assets
+   ("error connecting to api.github.com") after the draft was cut, the sync's
+   watch failed with it, and the tag existed so the next sync would exit
+   "nothing to release" - stranding a complete draft forever. Repaired by
+   re-running the failed leg (manifest then succeeded), publishing the draft
+   manually, and hardening upstream_sync.yml: a draft whose assets include
+   latest.json is complete (manifest only runs when every leg is green), so
+   the sync now publishes it instead of exiting. Verified the new guard takes
+   the correct branch on 2.21.0 (published: nothing to release, exit 0).
+   Also learned: changelog_publish can double-fire (gh release edit with a
+   user token spawns the release event, unlike GITHUB_TOKEN) - harmless,
+   concurrency serially cancels one. 18 assets, deb one-client 2.21.0
+   verified, nightly green first try.
+
+   LESSON: infrastructure failures after tag creation are a distinct class -
+   the draft+tag survive but every automatic path skips them (checks are
+   version-based). For any resource with a created-flag and a completed-flag,
+   the recovery path must key off the completed-flag (latest.json presence),
+   not the created one.
+
+## 2026-10-18 — "What changed since the last launch" ships in 2.22.0
+   Iteration 5: after triage names a suspect, the complementary question is
+   what changed since the game last ran - the single most useful debugging
+   signal and one no launcher surfaces (Prism threads are full of asking
+   users to paste logs because nobody knows what changed). Every session now
+   records its enabled mod set (hash, name, version) into a new
+   game_sessions.mods_snapshot column; the crash notification compares the
+   crashed session's set with the previous finished session and says "Added
+   / Removed / Updated (x.y -> z.w)" alongside the crash-report suspects.
+   Constraint dodged: the repo has no sqlx CLI and no DATABASE_URL, and the
+   checked queries live in committed .sqlx metadata, so the new column is
+   written and read through runtime sqlx queries - no metadata regeneration,
+   no touching the query_as! statements. Migration runs in the db crate
+   tests. 6 diff/serde unit tests, core 213 + db 28 green locally, app check
+   green. 2.22.0: 18 assets, latest.json, deb verified; nightly green first
+   try. Also verified CHECK constraint comparisons are lexical-friendly:
+   started_at RFC 3339 UTC strings order correctly for "previous session".
+
+   LESSON: when generated query metadata cannot be regenerated (no CLI, no
+   DATABASE_URL), new columns go through runtime SQL while existing checked
+   statements stay untouched - and a nullable, best-effort write keeps the
+   analytics row working even if the snapshot fails. "What changed" beats
+   "what crashed" for debugging; both now sit in the same notification.
+
+## 2026-10-18 — Config editor ships in 2.23.0 (iteration 6)
+   Iteration 6: every launcher tutorial ends with "now find your instance
+   folder and open config/<mod>.toml by hand" - Prism, ATLauncher and the
+   rest all stop at a folder-open button. First-launcher territory: a
+   Configs tab per instance listing every text file under config/ plus the
+   three root files guides actually reference (options.txt, optionsof.txt,
+   iris.properties), opened in a multiline editor with Save/Revert, a
+   discard prompt when switching files dirty, and a toast that says the game
+   reads it next launch. Security posture: only config/** and the exact
+   root allowlist are addressable, empty/./../absolute paths rejected,
+   symlinks skipped in listing and re-verified through canonicalize on
+   read/write, directory symlinks never traversed, files over 1 MiB never
+   listed nor read, non-UTF8 refuses with "is not text". Writes are
+   tmp+rename so a kill cannot leave half a config the game would parse.
+   Implementation notes: new ConfigsError in the cluster crate's error
+   enum; app side is a Query-backed list + content query (content keyed by
+   path) with render-time baseline adoption guarded by (path == baseline.0);
+   Actions is Clone-not-Copy so event closures capture clones; rustfmt on
+   view/app/cluster/mod.rs recursively reformatted logs.rs (accepted as
+   formatting-only). 6 new cluster tests (traversal, symlink leak, binary,
+   oversize, roundtrip, sorting) - cluster 34, core 213, db 28 green, app
+   check green, committed 267a0208.
+
+   LESSON: "open the folder" is where other launchers stop; the win is
+   finishing the workflow inside the launcher. Path-allowlist code belongs
+   in the crate that owns the folder (testable), the UI just renders what
+   it gets - and every list item's path must round-trip back through the
+   same validation the writer uses, or the editor becomes an exfiltration
+   path for the allowlist you thought you had.
+
+## 2026-10-18 — Playtime calendar ships in 2.24.0 (iteration 7)
+   Iteration 7: launchers show playtime as a number or a bar chart; none
+   show the shape of the year. The statistics page now carries a 26-week
+   GitHub-style calendar: one cell per day shaded by playtime, cell levels
+   computed from the user's own nonzero-day quartiles (so light players and
+   marathoners both get useful contrast), month labels wherever the month
+   changes, Mon/Wed/Fri gutter labels, a Less/More legend, and a hover
+   readout naming the exact date plus duration ("Sat, Mar 14 · 3h 12m").
+   Zero-playtime days render as component_bg, future days transparent.
+   Entirely app-side: no core or db change, reusing the existing
+   DayPlaytime series and utils (format_day/format_duration/parse_day).
+   Gotchas: two shadowing bugs (a local `label` String/&str shadowed the
+   label() element fn) fixed by renaming; rustfmt had collapsed a block
+   before a scripted patch so one edit went through the edit tool instead.
+   App check green, committed edb79f93; nightly green first try; sync cut
+   2.24.0 (release commit f0ce2d52), 18 assets, latest.json, changelog.json,
+   deb verified 22.9 MB.
+
+   LESSON: relative thresholds (quartiles of the user's own data) beat
+   absolute buckets for personal-timeline visualizations - "2 hours" means
+   light day to one player and nothing to another. And when scripting
+   patches, re-read the file after rustfmt: collapse rewrites break blind
+   string replaces.
+
+## 2026-10-18 — Servers page ships in 2.25.0 (iteration 8)
+   Iteration 8: the feature CurseForge has and Prism never did - a saved
+   servers page with live status. One row per server: real Server List Ping
+   (the 1.7+ varint-framed status exchange, implemented from scratch in
+   oneclient_net/slp.rs - handshake with protocol -1, status request,
+   tolerant JSON: description may be a plain string or a chat component
+   with nested extras, all flattened and §-colour-stripped), status dot,
+   MOTD, version, players, round-trip latency, instance dropdown and
+   Quick Play join. Persistence: saved_servers migration + runtime-query
+   DAO (no sqlx CLI, so no checked statements) with address normalisation
+   so "host" and "host:25565" dedupe, labels keep on re-add, most recently
+   joined sorts first. UI is a top-level route with a navbar link, refresh
+   invalidates every ping at once. Tests: local tokio listener serves a
+   canned status and the client parses it end-to-end (5 slp tests),
+   normalisation/rejection in core, DAO round-trips in db - net 28, core
+   215, db 30, cluster 34 green; app check clean. Committed 8bc6c863;
+   nightly green first try; sync cut 2.25.0 (release ab300828), 18 assets,
+   deb verified 23.0 MB.
+
+   LESSON: implementing a wire protocol against a canned local listener is
+   the cheapest honest test - it caught a real bug (JSON slice taken from
+   payload start instead of past the two varint prefixes) only after
+   instrumenting, because a silent no-op string patch had left the fix
+   unapplied: always verify the patch landed (grep the new code), not just
+   that the script printed "fixed". Normalise keys at the storage boundary
+   (host vs host:25565) or uniqueness silently breaks.
+
+## 2026-10-18 — Server history enrichment ships in 2.26.0 (iteration 9)
+   Iteration 9: saved servers now show your relationship with each server -
+   visit count, total playtime and relative last-played ("3d ago"), joined
+   against the session-history analytics already collected. Addresses match
+   through one normaliser (lowercase, FQDN dots trimmed, missing port =
+   25565) shared with storage, so "Play.Example.com" in history finds
+   "play.example.com:25565" in the list; the instance dropdown preselects
+   the cluster of the last recorded join. New helpers: core
+   servers::host_port/matches_saved (unit-tested), app utils
+   format_time_ago with phrase ladder (tested with fixed offsets). Commit
+   28481900; nightly green; sync cut 2.26.0, 18 assets, deb verified.
+   LESSON: Option::then consumes the value it tests - use as_ref().map()
+   when the render payload needs the same Option; and check the theme
+   palette before using colours (fg_tertiary does not exist here).
+
+## 2026-10-18 — Instance groups ship in 2.27.0 (iteration 10)
+   Iteration 10: MultiMC/Prism-style instance groups arrive. A group is a
+   nullable name on the cluster row (ALTER TABLE migration); the checked
+   sqlx macros in the cluster DAO are untouchable without metadata, so the
+   feature lives in a new runtime-query dao/cluster_group.rs
+   (list_assignments ordered NOCASE, set_group trimming blanks to NULL),
+   wrapped by core clusters::groups (trim + 60-char cap, unit-tested
+   against a hand-made table) and an app hook returning a HashMap so the
+   Versions page can render group sections: collapsible with counts,
+   ordered alphabetically, composed with search/filters/sort/pinning and
+   only containing instances that survived the current filter. Assignment
+   UI is "Move to group..." in the instance context menu opening a modal
+   with quick-pick chips for existing groups; empty name ungroups. Commit
+   1113b9bf; nightly green; sync cut 2.27.0, 18 assets, deb verified.
+   LESSON: before blaming a red test on your change, stash and rerun on
+   clean HEAD - a_disabled_override_on_an_unlinked_pin_offers_enable fails
+   upstream independently (pre-existing, CI does not run app-lib tests).
+   Also: on_press needs FnMut(Event<PressEventData>) - wrap FnMut() with
+   |_| on_toggle() and mark the captured closure parameter mut.
+
+## 2026-10-18 — Recent sessions timeline ships in 2.28.0 (iteration 11)
+   Iteration 11: the Stats page (and each instance overview, filtered to
+   that instance) now opens with a "Recent sessions" timeline - the last 80
+   finished sessions grouped by day, each row showing instance name, start
+   and end clock times, duration and a bar scaled to the day's longest
+   session, with day totals in the header. Implementation: new runtime
+   DAO join (game_sessions x clusters, newest first, optional cluster
+   filter), core PlaySession + group_sessions_by_day (drops unparseable or
+   non-positive spans; day keys use each timestamp's own offset so tests
+   do not depend on machine timezone), a keyed app query, and a
+   SessionsTimeline component that reuses chart_card. analytics_body grew
+   a cluster_id parameter so global and per-instance callers share one
+   body. Tests: DAO join/cap/open-session skip, core grouping, day_label
+   Today/Yesterday display logic - db 32, core 219, app 272 green. Commit
+   f113bf4e; nightly green; sync cut 2.28.0, 18 assets, deb verified.
+   LESSON: insert-before-anchor patches can land between an attribute and
+   the item it decorates (duplicate #[derive] conflicts) - re-read the
+   region after every scripted insert, and remember app test compiles are
+   slow: grep for results needs a generous timeout.
+
+## 2026-10-18 — Home "What's new" card ships in 2.29.0 (iteration 12) + AI handoff
+   Iteration 12: Home now shows a What's new card while the newest changelog
+   entry is unread - same unread condition as the Settings sidebar dot
+   (seen_changelog_version), same Markdown pipeline, one click into
+   Route::SettingsChangelog where opening marks it seen and the card retires
+   itself. Commit 4cbba9a5; nightly green; sync cut 2.29.0, 18 assets, deb
+   verified. LESSON: none new - reuse of existing state made this cheap; good
+   template for future "surface existing data on Home" cards.
+   Also: session ended with an OS migration by the user. A full handoff
+   folder was written to the repo at AI_HANDOFF/ (README, ITERATIONS,
+   LESSONS, FREYA_NOTES, PROJECT_MAP, WORKFLOW.md, AUDIT.txt copies) and
+   pushed so a fresh session on the new machine can resume the loop at
+   iteration 13 without rediscovery. ITERATIONS.md lists the backlog.
