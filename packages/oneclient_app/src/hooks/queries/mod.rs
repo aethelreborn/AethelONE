@@ -14,6 +14,7 @@ mod auth;
 mod bundles;
 mod changelog;
 mod cluster_content;
+mod cluster_groups;
 mod clusters;
 mod configs;
 mod disable_warnings;
@@ -65,6 +66,7 @@ pub use cluster_content::{
     cluster_content_items, use_cluster_content, use_migratable_routes, use_mod_health,
     use_mods_folder_sync, use_shadowed_mods,
 };
+pub use cluster_groups::{set_cluster_group, try_cluster_groups, use_cluster_groups};
 pub use clusters::{export_instance, import_instance, use_cluster, use_clusters};
 pub use configs::{
     invalidate_config_content, invalidate_config_files, try_config_content, try_config_files,

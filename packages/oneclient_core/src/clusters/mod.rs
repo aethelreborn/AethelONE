@@ -1,3 +1,4 @@
+mod groups;
 mod java_override;
 mod migrate;
 mod modpack;
@@ -6,6 +7,7 @@ mod provision;
 mod release_migration;
 mod unlink_legacy;
 
+pub use groups::{MAX_GROUP_CHARS, cluster_groups, set_cluster_group};
 pub use java_override::apply_bundle_java_override;
 pub use migrate::apply_remote_migrations;
 pub use modpack::{

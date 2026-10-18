@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use freya::prelude::*;
@@ -13,9 +14,9 @@ use crate::components::{
     VersionCard, cluster_nav_entries, open_folder_button,
 };
 use crate::hooks::{
-    export_instance, import_instance, settled_or_loading, use_active_cluster_id, use_clusters,
-    use_dispatch, use_game_snapshot, use_launcher, use_settings_snapshot, use_version_metadata,
-    use_view_state,
+    export_instance, import_instance, settled_or_loading, try_cluster_groups,
+    use_active_cluster_id, use_cluster_groups, use_clusters, use_dispatch, use_game_snapshot,
+    use_launcher, use_settings_snapshot, use_version_metadata, use_view_state,
 };
 use crate::routes::Route;
 use crate::theme::colors;
@@ -28,7 +29,7 @@ use crate::utils::{
 };
 use crate::view::app::clusters::{
     CreateInstanceModal, DeleteInstanceModal, DuplicateInstanceModal, EditInstanceModal,
-    InstanceFacts,
+    GroupInstanceModal, InstanceFacts,
 };
 use crate::view::app::{launch_button_state, launch_syncing, use_shared_dir_taken};
 
@@ -122,6 +123,11 @@ impl Component for Clusters {
         let sort = use_state(|| Sort::RecentFirst);
         let mut instance_menu = use_state(|| None::<(f32, f32, i64)>);
         let instance_modal = use_state(|| None::<InstanceAction>);
+        let group_modal = use_state(|| None::<i64>);
+        let collapsed_groups = use_state(Vec::<String>::new);
+        let group_query = use_cluster_groups();
+        let assignments: HashMap<i64, String> =
+            try_cluster_groups(&group_query).unwrap_or_default();
         let dispatch = use_dispatch();
         let layout = use_view_state("clusters").layout;
         let favorites = use_settings_snapshot().settings.favorite_clusters;
@@ -284,6 +290,38 @@ impl Component for Clusters {
             &favorites,
         );
 
+        let mut group_names: Vec<String> = assignments.values().cloned().collect();
+        group_names.sort_by_key(|name| name.to_lowercase());
+        let mut seen = std::collections::HashSet::new();
+        group_names.retain(|name| seen.insert(name.to_lowercase()));
+
+        let all_user_instances: Vec<&Cluster> = shown_custom
+            .iter()
+            .copied()
+            .chain(shown_packs.iter().copied())
+            .collect();
+        let group_sections: Vec<(String, Vec<&Cluster>)> = group_names
+            .iter()
+            .filter_map(|name| {
+                let members: Vec<&Cluster> = all_user_instances
+                    .iter()
+                    .copied()
+                    .filter(|cluster| assignments.get(&cluster.id) == Some(name))
+                    .collect();
+                (!members.is_empty()).then(|| (name.clone(), members))
+            })
+            .collect();
+        let ungrouped_custom: Vec<&Cluster> = shown_custom
+            .iter()
+            .copied()
+            .filter(|cluster| !assignments.contains_key(&cluster.id))
+            .collect();
+        let ungrouped_packs: Vec<&Cluster> = shown_packs
+            .iter()
+            .copied()
+            .filter(|cluster| !assignments.contains_key(&cluster.id))
+            .collect();
+
         let mut available_loaders: Vec<String> =
             clusters.iter().map(|c| c.mc_loader.to_string()).collect();
         available_loaders.sort();
@@ -430,31 +468,61 @@ impl Component for Clusters {
                                             fixed_grid(line_cards, columns, item_height, gap),
                                         )
                                     }))
+                                    .append_children(group_sections.iter().map(|(name, members)| {
+                                        let collapsed = collapsed_groups.read().contains(name);
+                                        let toggle_name = name.clone();
+                                        let mut collapsed_state = collapsed_groups;
+                                        let toggle = move || {
+                                            let mut list = collapsed_state.peek().clone();
+                                            match list.iter().position(|entry| entry == &toggle_name)
+                                            {
+                                                Some(index) => {
+                                                    list.remove(index);
+                                                }
+                                                None => list.push(toggle_name.clone()),
+                                            }
+                                            collapsed_state.set(list);
+                                        };
+                                        group_section(
+                                            name.clone(),
+                                            members.len(),
+                                            collapsed,
+                                            toggle,
+                                            fixed_grid(
+                                                instance_rows(members),
+                                                columns,
+                                                item_height,
+                                                gap,
+                                            ),
+                                        )
+                                    }))
                                     .append_children(
                                         [
                                             (
                                                 "Custom",
                                                 "Your own instances, modded or vanilla",
-                                                &shown_custom,
+                                                &ungrouped_custom,
                                             ),
-                                            ("Modpacks", "Installed from Browse", &shown_packs),
+                                            (
+                                                "Modpacks",
+                                                "Installed from Browse",
+                                                &ungrouped_packs,
+                                            ),
                                         ]
                                         .into_iter()
                                         .filter(|(_, _, list)| !list.is_empty())
-                                        .map(
-                                            |(title, caption, list)| {
-                                                section(
-                                                    title,
-                                                    caption,
-                                                    fixed_grid(
-                                                        instance_rows(list),
-                                                        columns,
-                                                        item_height,
-                                                        gap,
-                                                    ),
-                                                )
-                                            },
-                                        ),
+                                        .map(|(title, caption, list)| {
+                                            section(
+                                                title,
+                                                caption,
+                                                fixed_grid(
+                                                    instance_rows(list),
+                                                    columns,
+                                                    item_height,
+                                                    gap,
+                                                ),
+                                            )
+                                        }),
                                     )
                                     .append_children(nothing_shown.then(move || {
                                         let mut query = query;
@@ -494,11 +562,18 @@ impl Component for Clusters {
             .maybe_child(instance_menu_overlay(
                 instance_menu,
                 instance_modal,
+                group_modal,
                 &clusters,
                 dispatch,
                 &favorites,
             ))
             .maybe_child(instance_action_modal(instance_modal, &clusters))
+            .maybe_child(group_instance_modal(
+                group_modal,
+                &clusters,
+                &assignments,
+                &group_names,
+            ))
             .maybe_child(create_modal(show_create))
     }
 }
@@ -512,6 +587,7 @@ fn create_modal(mut show_create: State<bool>) -> Option<Element> {
 fn instance_menu_overlay(
     mut menu: State<Option<(f32, f32, i64)>>,
     mut instance_modal: State<Option<InstanceAction>>,
+    mut group_modal: State<Option<i64>>,
     clusters: &[Cluster],
     dispatch: crate::Actions,
     favorites: &[i64],
@@ -538,6 +614,10 @@ fn instance_menu_overlay(
     };
     context = context.action(IconType::Star01, pin_label, move |()| {
         pin_dispatch.toggle_favorite_cluster(id);
+        menu.set(None);
+    });
+    context = context.action(IconType::Folder, "Move to group\u{2026}", move |()| {
+        group_modal.set(Some(id));
         menu.set(None);
     });
     let export_dispatch = dispatch.clone();
@@ -647,6 +727,26 @@ fn instance_action_modal(
     })
 }
 
+fn group_instance_modal(
+    mut modal: State<Option<i64>>,
+    clusters: &[Cluster],
+    assignments: &HashMap<i64, String>,
+    group_names: &[String],
+) -> Option<Element> {
+    let id = (*modal.read())?;
+    let cluster = clusters.iter().find(|c| c.id == id)?;
+    Some(
+        GroupInstanceModal::new(
+            id,
+            cluster.name.clone(),
+            assignments.get(&id).cloned(),
+            group_names.to_vec(),
+            move |()| modal.set(None),
+        )
+        .into_element(),
+    )
+}
+
 fn shown<'a>(
     list: &[&'a Cluster],
     sort: Sort,
@@ -705,6 +805,59 @@ fn bottom_border() -> Border {
             bottom: 1.,
             left: 0.,
         })
+}
+
+fn group_section(
+    name: String,
+    count: usize,
+    collapsed: bool,
+    mut on_toggle: impl FnMut() + 'static,
+    grid: Element,
+) -> Element {
+    let chevron = if collapsed {
+        IconType::ChevronRight
+    } else {
+        IconType::ChevronDown
+    };
+    let caption = if count == 1 {
+        "1 instance".to_string()
+    } else {
+        format!("{count} instances")
+    };
+
+    rect()
+        .vertical()
+        .width(Size::fill())
+        .spacing(10.)
+        .child(
+            rect()
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .spacing(8.)
+                .child(
+                    Button::new()
+                        .ghost()
+                        .icon()
+                        .small()
+                        .on_press(move |_| on_toggle())
+                        .child(Icon::new(chevron).size(14.)),
+                )
+                .child(
+                    label()
+                        .text(name)
+                        .font_size(14.)
+                        .font_weight(FontWeight::MEDIUM)
+                        .color(colors::fg_primary()),
+                )
+                .child(
+                    label()
+                        .text(caption)
+                        .font_size(12.)
+                        .color(colors::fg_secondary()),
+                ),
+        )
+        .maybe_child((!collapsed).then(move || grid))
+        .into_element()
 }
 
 fn section(title: &str, caption: &str, grid: Element) -> Element {

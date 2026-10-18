@@ -89,6 +89,7 @@ pub use queries::{
     invalidate_config_content, invalidate_config_files, try_config_content, try_config_files,
     use_config_content, use_config_files, write_config_file,
 };
+pub use queries::{set_cluster_group, try_cluster_groups, use_cluster_groups};
 
 use crate::notifications::NotificationSnapshot;
 use crate::state::{

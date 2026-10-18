@@ -9,6 +9,7 @@ mod create;
 mod data;
 mod details;
 mod edit;
+mod group;
 mod model;
 mod rail;
 mod shell;
@@ -16,6 +17,7 @@ mod steps;
 
 pub use create::CreateInstanceModal;
 pub use edit::{ChangeVersionModal, DuplicateInstanceModal, EditInstanceModal, InstanceFacts};
+pub use group::GroupInstanceModal;
 
 pub fn tidy_file_name(raw: &str) -> String {
     let stem = raw

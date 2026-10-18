@@ -5,6 +5,6 @@ mod page;
 pub use delete_instance::DeleteInstanceModal;
 pub use instance::{
     ChangeVersionModal, CreateInstanceModal, DuplicateInstanceModal, EditInstanceModal,
-    InstanceFacts,
+    GroupInstanceModal, InstanceFacts,
 };
 pub use page::Clusters;
