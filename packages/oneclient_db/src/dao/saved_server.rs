@@ -97,11 +97,15 @@ mod tests {
         let first = add(&pool, "a.example.com", None).await.unwrap();
         let second = add(&pool, "b.example.com", None).await.unwrap();
 
-        mark_joined(&pool, first.id, "2026-10-18T12:00:00Z")
-            .await
-            .unwrap();
+        // `list_all` falls back to `created_at` for never-joined rows, and
+        // sqlite stamps that with wall-clock now, so a fixed literal here goes
+        // stale the day it slips into the past. Join in the future instead.
+        let joined_at = (chrono::Utc::now() + chrono::Duration::days(365))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        mark_joined(&pool, first.id, &joined_at).await.unwrap();
         let listed = list_all(&pool).await.unwrap();
         assert_eq!(listed[0].id, first.id, "most recently joined comes first");
+        assert_eq!(listed[1].id, second.id, "never joined sorts by creation");
 
         assert!(remove(&pool, second.id).await.unwrap());
         assert!(
