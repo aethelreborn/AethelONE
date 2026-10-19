@@ -18,6 +18,7 @@ are separate `chore: release X.Y.Z` commits — `git log` shows both).
 | 10 | Instance groups (collapsible folders on Versions page) | 2.27.0 | `1113b9bf` | 18 assets, deb ok |
 | 11 | Recent sessions timeline (analytics + per-instance overview) | 2.28.0 | `f113bf4e` | 18 assets, deb ok |
 | 12 | Home "What's new" card for unread changelog | 2.29.0 | `4cbba9a5` (release `1409a1ca`) | 18 assets, deb ok |
+| 13 | Keep the launcher running while a game plays (cosmetics proxy stays up) | 2.29.1 | `640432fa` (release `dbb9d9b9`) | 18 assets, deb ok |
 
 Latest release commits at handoff: `1ba6b296` (2.28.0), `cae690bf` (2.27.0),
 `59b19f19` (2.26.0), `ab300828` (2.25.0).
@@ -82,4 +83,6 @@ Latest release commits at handoff: `1ba6b296` (2.28.0), `cae690bf` (2.27.0),
 - `oneclient_cluster`: 34 tests (`cargo test -p oneclient_cluster --lib -- --test-threads=1`)
 - `oneclient_net`: 28 tests (includes 5 slp tests)
 - `oneclient_app` lib tests: 272 pass, 1 pre-existing failure unrelated to us
-  (see LESSONS.md; CI does not run app tests)
+  (see LESSONS.md). Update 2026-10-19: CI now runs app tests too, skipping
+  that one failure (`--skip a_disabled_override_on_an_unlinked_pin_offers_enable`),
+  plus the full workspace suite - see oneclient_nightly.yml.

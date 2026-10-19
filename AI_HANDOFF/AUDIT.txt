@@ -1670,3 +1670,40 @@ NEEDS A HUMAN:
    LESSONS, FREYA_NOTES, PROJECT_MAP, WORKFLOW.md, AUDIT.txt copies) and
    pushed so a fresh session on the new machine can resume the loop at
    iteration 13 without rediscovery. ITERATIONS.md lists the backlog.
+
+## 2026-10-19 — Equip failures were the launcher quitting under a running game (2.29.1)
+   Reported as cosmetics that could not be equipped when the game was started
+   from the launcher, with the wardrobe claiming "PolyPlus couldn't reach its
+   servers ... check your connection". The logs said otherwise: the launcher
+   window had been closed at 08:54:45 while the game kept running, and with it
+   died the launcher-hosted Poly+ cosmetics proxy on 127.0.0.1:8777; every
+   equip afterwards failed with java.net.ConnectException: Connection refused
+   while the mod retried on a backoff. A second session repeated it (launcher
+   quit 10:19:04, the mod lost its websocket a moment later). Root cause is
+   launcher-side: with the default run_in_background = false the close hook
+   treated the window's X as quit even though the game outlives the window.
+   Fix (640432fa): a GAME_PLAYING flag fed by GameState::has_live_game (any
+   launch pending, or any stage short of Exited) makes the close hook hide
+   instead of quitting while a game is in flight or live; the tray
+   "Quit AethelONE" item stays the explicit exit, and the explicit
+   LaunchBehaviour::CloseLauncher opt-in still closes after launch. Mod-side
+   companion (aethelreborn/AethelOnePLUS 24f0880, already live in the rolling
+   mirror): a connection-level failure against a loopback backend now reads
+   "Start the AethelONE launcher (it runs your cosmetics locally), then retry"
+   on the catalog failure screen and the equip, unequip and aura status lines,
+   instead of generic internet advice; the hint only arms when the API URL is
+   loopback, so production backends keep yesterday's text. While gating the
+   release the new workspace test step caught a date bomb from the servers
+   page (8bc6c863): its ordering test stamped a join at a fixed
+   2026-10-18T12:00:00Z literal that string-compares below every fresh
+   created_at from the next UTC day on, so the suite could never pass again -
+   the stamp is now derived from now + 365d (6617b5a1). 2.29.1: nightly green
+   (second attempt, after that db fix), 18 assets, latest.json, deb verified
+   23.0 MB.
+
+   LESSON: a launcher that owns a local service another process depends on
+   must not exit while that process is alive - once a game is running, window
+   close and application quit are different verbs. And never bake a fixed date
+   into one side of an ordering test when the other side comes from sqlite's
+   CURRENT_TIMESTAMP: derive every key from the same clock, or the test is a
+   bomb set to detonate at the next date boundary, exactly like this one.
