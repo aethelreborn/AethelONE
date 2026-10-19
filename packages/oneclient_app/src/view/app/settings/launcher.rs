@@ -176,7 +176,7 @@ impl Component for SettingsLauncher {
             .child(settings_row(
                 IconType::Colors,
                 "All Cosmetics Unlocked",
-                "Every Poly+ cape, wing and emote owned locally — equipping and sync run inside AethelONE, on this machine only.",
+                "Every Poly+ cape, wing and emote owned locally — equipping and sync run inside AethelONE while it is running, on this machine only.",
                 resettable(
                     toggle(cosmetics_unlock),
                     cosmetics_unlock,

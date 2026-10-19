@@ -318,6 +318,17 @@ impl GameState {
             .map(|(id, _)| *id)
     }
 
+    /// A game the launcher is preparing or playing: the launcher must keep
+    /// serving it (cosmetics proxy, playtime, Discord RPC) while one is live.
+    #[must_use]
+    pub fn has_live_game(&self) -> bool {
+        !self.pending.is_empty()
+            || self
+                .stages
+                .values()
+                .any(|stage| *stage != LaunchStage::Exited)
+    }
+
     #[must_use]
     pub fn is_running(&self, cluster_id: i64) -> bool {
         self.stage(cluster_id) == Some(LaunchStage::Running)
@@ -354,6 +365,25 @@ mod tests {
         game.stages.insert(1, LaunchStage::Running);
 
         assert!(!game.begin_launch(1));
+    }
+
+    #[test]
+    fn a_live_game_covers_the_whole_launch_and_play_cycle() {
+        let mut game = GameState::default();
+        assert!(!game.has_live_game());
+
+        assert!(game.begin_launch(1));
+        assert!(game.has_live_game(), "an in-flight launch counts");
+
+        game.finish_launch(1);
+        game.stages.insert(1, LaunchStage::Downloading);
+        assert!(game.has_live_game(), "a busy stage counts");
+
+        game.stages.insert(1, LaunchStage::Running);
+        assert!(game.has_live_game(), "a running game counts");
+
+        game.stages.insert(1, LaunchStage::Exited);
+        assert!(!game.has_live_game(), "an exited game does not");
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use freya::prelude::{Platform, WinitPlatformExt, spawn_forever};
 use freya::radio::RadioStation;
@@ -7,6 +8,11 @@ use oneclient_core::settings::LaunchBehaviour;
 use crate::state::{AppChannel, AppState};
 
 const ALLOWED_URL_SCHEMES: [&str; 3] = ["http", "https", "mailto"];
+
+/// A game the launcher is preparing or playing. The launcher hosts the local
+/// cosmetics proxy, session tracking and Discord presence the game talks to,
+/// so while this is set a close request hides the window instead of quitting.
+static GAME_PLAYING: AtomicBool = AtomicBool::new(false);
 
 pub fn focus_window() {
     Platform::get().with_window(Platform::window_id(), |win| {
@@ -34,10 +40,26 @@ pub fn hide_window() {
     });
 }
 
+/// A close request. While a game is being prepared or playing, hiding is the
+/// only safe outcome: quitting would take the local cosmetics proxy, session
+/// tracking and Discord presence down with it. The tray menu's Quit AethelONE
+/// stays the explicit way to stop the launcher anyway.
 pub fn close() {
     let background =
         crate::launcher::state().is_ok_and(|state| state.settings.read().run_in_background);
-    if background { hide_window() } else { quit() }
+    let playing = GAME_PLAYING.load(Ordering::Relaxed);
+    if playing && !background {
+        tracing::info!("a game is still playing, hiding the launcher instead of quitting");
+    }
+    if keeps_running_on_close(background, playing) {
+        hide_window()
+    } else {
+        quit()
+    }
+}
+
+fn keeps_running_on_close(background: bool, playing: bool) -> bool {
+    background || playing
 }
 
 pub fn quit() {
@@ -55,7 +77,7 @@ pub fn follow_game(
     launched: &HashSet<i64>,
     previous: Option<i64>,
 ) -> Option<i64> {
-    let (current, any, behaviour) = {
+    let (current, any, live, behaviour) = {
         let state = station.peek();
         (
             state
@@ -64,10 +86,12 @@ pub fn follow_game(
                 .filter(|id| launched.contains(id))
                 .min(),
             state.game.running_clusters().next().is_some(),
+            state.game.has_live_game(),
             state.settings.settings.launch_behaviour,
         )
     };
 
+    GAME_PLAYING.store(live, Ordering::Relaxed);
     tray::set_game_running(any);
 
     if current == previous {
@@ -347,5 +371,20 @@ pub mod macos {
                 if menu_bar_only { ACCESSORY } else { REGULAR },
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keeps_running_on_close;
+
+    #[test]
+    fn a_playing_game_keeps_the_launcher_process_alive() {
+        assert!(!keeps_running_on_close(false, false));
+        assert!(
+            keeps_running_on_close(true, false),
+            "run-in-background hides"
+        );
+        assert!(keeps_running_on_close(false, true), "a playing game hides");
     }
 }
