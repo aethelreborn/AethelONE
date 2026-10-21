@@ -71,6 +71,14 @@ redirecting the work.
 9. Restart the loop: pick iteration 13 from the backlog and go.
 ```
 
+> **Windows box (2026-10-21):** this machine has no MSVC toolchain (no
+> `link.exe`, no `cl.exe`, no cmake) and no rustup, so **cargo cannot compile
+> anything here** — not even a proc macro. `rustfmt` is installed and works
+> (`rustfmt --edition 2024 <file>`); use it on every touched file. The CI is
+> the compile gate: `cargo test --workspace` plus the four platform builds,
+> ~20 minutes per push. The crates.io download took 35 minutes here (825
+> crates, 48 MB), so budget an hour before the first build starts.
+
 OS notes: everything in the pipeline is cross-platform except the `.deb`
 verification (`dpkg-deb --info`) — on non-Linux verify a release with
 `gh release view oneclient-X.Y.Z -R aethelreborn/AethelONE --json isDraft,assets`.
@@ -185,23 +193,34 @@ component (`view/app/**`) → route/nav/palette wiring if it is a page.
 
 ## 7. Where everything shipped (summary)
 
-Iterations 1–12 are complete and released: **2.18.0 → 2.29.0**. Release
-2.29.0 (Home "What's new" card, commit `4cbba9a5`, release commit `1409a1ca`,
-18 assets + deb verified) was cut during this handoff. Full table with
-commits, versions, test counts and lessons: `ITERATIONS.md`.
-Audit trail with per-wave lessons: `AUDIT.txt`.
+Iterations 1–14 are complete and released: **2.18.0 → 2.30.0**. Release
+2.30.0 (Performance Mode — the launcher now tunes the JVM, the heap and the
+game's own video settings instead of only promising to, commit `e7ee5d4d`,
+release commit `742d0c8e`, 18 assets) was cut on 2026-10-21 from the new
+Windows machine. Full table with commits, versions, test counts and lessons:
+`ITERATIONS.md`. Audit trail with per-wave lessons: `AUDIT.txt`.
 
 ## 8. Exact resume point
 
-- Local `main`: release commit `1409a1ca` (2.29.0) + the handoff-folder
-  commit that follows it. Run `git pull aethelone main` to be current.
+- Local `main`: the release commits of 2.30.0 (`742d0c8e`) plus the
+  performance-set commit `9c103fca`. Run `git pull origin main` to be current.
 - PolyPlus: untouched, healthy, `0175d8f`, polydium pinned `1.1.2`.
-- **Next iteration = 13.** Candidate backlog (in rough priority order):
-  1. Editable saved-server labels (column exists, no UI sets it yet).
-  2. Pending bundle/package updates preview ("what will change") before launch sync.
-  3. Storage page: visual size treemap / top consumers.
-  4. Mods page: grouping/tabs polish (Updates-first view).
-  5. Session timeline follow-ups if users want zoom/range control.
+- **The upstream sync has been failing since 2026-10-21**: merging
+  `Polyfrost/OneLauncher` upstream conflicts in ~15 files (the fork has
+  diverged a lot). The release workflow was dispatched directly instead
+  (`gh workflow run oneclient_release.yml`), then the draft was published by
+  hand and `changelog_publish.yml` was dispatched. Resolving that merge is
+  the biggest open chore.
+- **Next iteration = 15** (the performance set is committed and waiting for
+  its release, the per-instance mode is written and waiting for its commit).
+  Candidate backlog (in rough priority order):
+  1. Release the performance set (2.31.0) and the per-instance mode (2.32.0).
+  2. Resolve the upstream merge so the sync stops failing.
+  3. Editable saved-server labels (column exists, no UI sets it yet).
+  4. Pending bundle/package updates preview ("what will change") before launch sync.
+  5. Storage page: visual size treemap / top consumers.
+  6. Mods page: grouping/tabs polish (Updates-first view).
+  7. Session timeline follow-ups if users want zoom/range control.
   Research fresh candidates too — the loop allows any scope.
 - Also polish candidates: server rows drag-to-reorder; groups on Home;
   relative-time refresh on servers page; heatmap tooltip improvements.

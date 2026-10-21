@@ -77,8 +77,8 @@ impl Component for PerformanceSet {
             let installed = self.installed.clone();
 
             move |_| {
-                for (project_id, version) in picks {
-                    if installed.iter().any(|id| id == project_id) {
+                for (project_id, version) in &picks {
+                    if installed.iter().any(|id| id.as_str() == *project_id) {
                         continue;
                     }
                     let Some(version) = version else {
@@ -88,7 +88,7 @@ impl Component for PerformanceSet {
                         cluster_id,
                         ProviderId::Modrinth,
                         project_id.to_string(),
-                        version,
+                        version.clone(),
                         None,
                     );
                 }

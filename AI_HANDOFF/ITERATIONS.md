@@ -19,6 +19,9 @@ are separate `chore: release X.Y.Z` commits — `git log` shows both).
 | 11 | Recent sessions timeline (analytics + per-instance overview) | 2.28.0 | `f113bf4e` | 18 assets, deb ok |
 | 12 | Home "What's new" card for unread changelog | 2.29.0 | `4cbba9a5` (release `1409a1ca`) | 18 assets, deb ok |
 | 13 | Keep the launcher running while a game plays (cosmetics proxy stays up) | 2.29.1 | `640432fa` (release `dbb9d9b9`) | 18 assets, deb ok |
+| 14 | Performance Mode (GC tuning, heap cap, video settings written at launch) | 2.30.0 | `e7ee5d4d` (release `742d0c8e`) | 18 assets |
+| 15 | Performance set card on the Mods page (one-click perf mods) | 2.31.0 | `9c103fca` | pending release |
+| 16 | Per-instance Performance Mode (instance overrides the global one) | 2.32.0 | pending | pending release |
 
 Latest release commits at handoff: `1ba6b296` (2.28.0), `cae690bf` (2.27.0),
 `59b19f19` (2.26.0), `ab300828` (2.25.0).
@@ -56,6 +59,22 @@ Latest release commits at handoff: `1ba6b296` (2.28.0), `cae690bf` (2.27.0),
 12. **What's new**: Home card shows the newest changelog entry while unread;
     "Read it all" → `Route::SettingsChangelog {}`; disappears once seen
     (`seen_changelog_version`).
+13. **Keep running while a game plays**: the window hides instead of quitting
+    while a launch is in flight or a game is live, so the local cosmetics
+    proxy stays up.
+14. **Performance Mode** (`oneclient_common/src/performance.rs`, the mode in
+    the profile's `os_extra`, the launch wiring in `core/src/game/launch.rs`,
+    the options writer in `cluster/src/configs/mod.rs`): Off / Balanced /
+    Low-spec. At launch the JVM is told how long a frame may wait, the
+    repeated strings are stored once, the low-spec mode caps the heap at what
+    the machine can afford (never for an instance with mods) and the video
+    settings are written into the game's own `options.txt`.
+15. **Performance set** (`view/app/cluster/performance.rs`): the Mods page
+    opens with the five mods that raise the frame rate the most, each with an
+    install button and one button for all the missing ones.
+16. **Per-instance Performance Mode** (`view/app/cluster/cluster_settings.rs`):
+    the instance settings carry the mode; `merge_global` now merges the
+    `os_extra` fields one by one instead of the whole blob.
 
 ## Confirmed-covered gaps (do NOT build these — they already exist)
 

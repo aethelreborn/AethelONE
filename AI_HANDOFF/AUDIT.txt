@@ -1707,3 +1707,47 @@ NEEDS A HUMAN:
    into one side of an ordering test when the other side comes from sqlite's
    CURRENT_TIMESTAMP: derive every key from the same clock, or the test is a
    bomb set to detonate at the next date boundary, exactly like this one.
+
+## 2026-10-21 - Performance Mode ships in 2.30.0 (iteration 14)
+   Iteration 14: the launcher promised performance and delivered a promise, so
+   it now does the work. Settings - Minecraft carries a Performance Mode row
+   (Off, Balanced, Low-spec) that names the machine ("3 GB of memory, 2
+   cores"), says which mode fits it and lists every change the mode makes. At
+   launch the plan is applied: the collector is told how long it may hold a
+   frame (-XX:MaxGCPauseMillis=50), the repeated strings the game holds are
+   stored once (-XX:+UseStringDeduplication, only with the collector that
+   supports it), the low-spec mode hands the game a heap the machine can
+   afford so a 4 GB laptop stops paging, and the video settings the mode
+   promises are written into the game's own options.txt before every launch
+   (render distance, simulation distance, particles, entity distance, clouds,
+   and on the low-spec mode fast graphics, no ambient occlusion and a smaller
+   mipmap). Instances that carry mods keep the memory they need: a pack that
+   needs four gigabytes is never handed less. New: the oneclient_common
+   performance module (PerformanceMode, SystemProfile, the plan), the mode in
+   the profile's os_extra (a JSON column, so no migration was needed), the
+   options writer in the cluster crate and the launch wiring in the core.
+   Committed e7ee5d4d + 2fa94c69; nightly green; release 2.30.0, 18 assets.
+
+   LESSON: a launcher that claims to raise the frame rate has two levers - the
+   garbage collector and the game's own video settings - and everything else
+   is a promise. The third lever is the memory: on a 4 GB machine the stutter
+   is usually the system paging, not the game, so the heap the game is given
+   matters more than any flag. And a machine that cannot link cannot verify
+   anything: this box has no MSVC toolchain, so cargo cannot build a single
+   proc macro and the CI is the only compile gate - keep the commits small
+   enough that a red run names the change that broke it.
+
+## 2026-10-21 - New machine notes (Windows, the 4 GB laptop)
+   The session moved to Windows. AethelONE itself is fine there (the fork
+   ships a Windows installer and the nightly builds it), but the box has no
+   MSVC toolchain - no link.exe, no cl.exe, no cmake, no rustup - so cargo
+   cannot compile anything here, not even a proc macro. rustfmt IS installed
+   ("C:\Program Files\Rust stable MSVC 1.99\bin\rustfmt.exe") and is the one
+   tool that still works offline; use it on every touched file
+   (--edition 2024). The crates.io download for this workspace took 35
+   minutes on this connection (825 crates, 48 MB), so budget an hour before
+   the first build even starts. The CI is the compile gate: cargo test
+   --workspace plus the four platform builds, about 20 minutes per push.
+   Another session works in the same checkout (it pushed the PolyPlus mirror
+   update e2309c80 while this session was running) - keep every commit to
+   explicit paths and never sweep the tree with git add -A.
