@@ -1,3 +1,7 @@
+// The import path nests its awaits deeply enough that the layout of the async
+// block needs more room than the default recursion limit gives it
+#![recursion_limit = "256"]
+
 use oneclient_common::domain::{ContentType, GameLoader, ProviderId};
 use oneclient_content::bundles::{
     BundleFile, BundleFileKind, BundleFileType, BundleManifest, check_bundle_updates,

@@ -1,3 +1,7 @@
+// The import path nests its awaits deeply enough that the layout of the async
+// block needs more room than the default recursion limit gives it
+#![recursion_limit = "256"]
+
 use oneclient_core::dev;
 use oneclient_core::game::download_to_path;
 use oneclient_events::{GroupedProgressSession, TaskCategory};
