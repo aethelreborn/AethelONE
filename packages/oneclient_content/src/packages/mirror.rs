@@ -5,19 +5,21 @@
 //! or has no entry for the requested mc version, so the mirror can disappear
 //! entirely without breaking PolyPlus installs.
 
+use std::cmp::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use serde::Deserialize;
 
 use oneclient_common::constants::{POLYPLUS_MIRROR_MANIFEST_URL, POLYPLUS_MODRINTH_PROJECT_ID};
-use oneclient_common::domain::ProviderId;
+use oneclient_common::domain::{GameLoader, ProviderId};
 use oneclient_common::paths;
 use oneclient_net::{EtagPolicy, fetch_cached};
 
 use crate::bundles::{BundleFile, BundleFileKind};
 use crate::ctx::ContentCtx;
-use crate::packages::types::VersionFile;
+use crate::packages::types::{VersionDetail, VersionFile};
 
 /// Tracked bundle version id written for a mirrored install stands for the
 /// mirrored bytes rather than any provider version id
@@ -130,6 +132,75 @@ pub fn rewrite_with(manifest: &MirrorManifest, file: &VersionFile) -> Option<Ver
         primary: file.primary,
         fingerprint: file.fingerprint.clone(),
     })
+}
+
+/// The version id a mirror build is recorded under
+#[must_use]
+pub fn version_id_for(entry: &MirrorEntry) -> String {
+    format!("{MARKER_PREFIX}{}", entry.sha1)
+}
+
+/// True when a version id names a mirror build rather than a provider release
+#[must_use]
+pub fn is_mirror_version(version_id: &str) -> bool {
+    version_id.starts_with(MARKER_PREFIX)
+}
+
+/// `polyplus-1.3.11+1.21.1.jar` -> `1.3.11`
+#[must_use]
+pub fn version_number_from_file_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let stem = base.strip_suffix(".jar").unwrap_or(base);
+    let version = stem.split_once('+').map_or(stem, |(version, _)| version);
+    version.strip_prefix("polyplus-").unwrap_or(version).to_string()
+}
+
+/// Compares dotted version numbers, `None` when they cannot be compared
+#[must_use]
+pub fn compare_versions(left: &str, right: &str) -> Option<Ordering> {
+    let parse = |raw: &str| -> Option<Vec<u64>> {
+        let head = raw.split(['-', '+']).next()?;
+        let parts: Vec<u64> = head
+            .split('.')
+            .map(|part| part.parse::<u64>().ok())
+            .collect::<Option<Vec<u64>>>()?;
+        (!parts.is_empty()).then_some(parts)
+    };
+    let left = parse(left)?;
+    let right = parse(right)?;
+    for (l, r) in left.iter().zip(right.iter()) {
+        match l.cmp(r) {
+            Ordering::Equal => {}
+            other => return Some(other),
+        }
+    }
+    Some(left.len().cmp(&right.len()))
+}
+
+/// The mirror build for a game version, shaped like a provider release so the
+/// install path does not need a second code path for it
+#[must_use]
+pub fn version_from_entry(entry: &MirrorEntry, loader: GameLoader) -> VersionDetail {
+    VersionDetail {
+        version_id: version_id_for(entry),
+        project_id: POLYPLUS_MODRINTH_PROJECT_ID.to_string(),
+        name: entry.file_name.clone(),
+        version_number: version_number_from_file_name(&entry.file_name),
+        changelog: None,
+        game_versions: vec![entry.mc_version.clone()],
+        loaders: vec![loader],
+        published: Utc::now(),
+        downloads: 0,
+        files: vec![VersionFile {
+            sha1: entry.sha1.clone(),
+            url: entry.url.clone(),
+            file_name: entry.file_name.clone(),
+            primary: true,
+            size: entry.size,
+            fingerprint: None,
+        }],
+        dependencies: Vec::new(),
+    }
 }
 
 /// Applies only to PolyPlus files; every other download reaches this on the
@@ -419,5 +490,52 @@ mod tests {
 
         let unparsable = version_file("PolyPlus.jar");
         assert!(rewrite_with(&manifest(), &unparsable).is_none());
+    }
+
+    #[test]
+    fn a_mirror_build_gets_a_version_id_of_its_own() {
+        let entry = manifest().entry_for_mc("26.1").expect("entry exists");
+
+        assert_eq!(version_id_for(entry), "mirror:bbb222");
+        assert!(is_mirror_version(&version_id_for(entry)));
+        assert!(!is_mirror_version("v1.2.57"));
+    }
+
+    #[test]
+    fn the_version_number_comes_out_of_the_file_name() {
+        assert_eq!(version_number_from_file_name("polyplus-1.3.11+1.21.1.jar"), "1.3.11");
+        assert_eq!(
+            version_number_from_file_name("mods/polyplus-1.3.11+26.3.jar"),
+            "1.3.11"
+        );
+        assert_eq!(version_number_from_file_name("polyplus-1.3.11.jar"), "1.3.11");
+    }
+
+    #[test]
+    fn versions_compare_by_their_numbers() {
+        assert_eq!(compare_versions("1.3.11", "1.3.10"), Some(Ordering::Greater));
+        assert_eq!(compare_versions("1.3.10", "1.3.11"), Some(Ordering::Less));
+        assert_eq!(compare_versions("1.3.11", "1.3.11"), Some(Ordering::Equal));
+        assert_eq!(compare_versions("1.3.11", "1.3.11.1"), Some(Ordering::Less));
+        assert_eq!(compare_versions("1.3", "1.3.0"), Some(Ordering::Less));
+        assert_eq!(compare_versions("", "1.3.11"), None);
+        assert_eq!(compare_versions("nightly", "1.3.11"), None);
+    }
+
+    #[test]
+    fn a_mirror_build_is_shaped_like_a_provider_release() {
+        let entry = manifest().entry_for_mc("1.21.11").expect("entry exists");
+
+        let version = version_from_entry(entry, GameLoader::Fabric);
+
+        assert_eq!(version.version_id, "mirror:aaa111");
+        assert_eq!(version.project_id, POLYPLUS_MODRINTH_PROJECT_ID);
+        assert_eq!(version.version_number, "1.2.57");
+        assert_eq!(version.game_versions, vec!["1.21.11".to_string()]);
+        assert_eq!(version.loaders, vec![GameLoader::Fabric]);
+        let file = version.primary_file().expect("a primary file");
+        assert_eq!(file.sha1, "aaa111");
+        assert_eq!(file.url, "https://example.test/polyplus-1.2.57%2B1.21.11.jar");
+        assert!(file.primary);
     }
 }

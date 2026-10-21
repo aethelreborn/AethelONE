@@ -10,7 +10,8 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 
-use oneclient_common::domain::{ContentType, ProviderId};
+use oneclient_common::constants::POLYPLUS_MODRINTH_PROJECT_ID;
+use oneclient_common::domain::{ContentType, GameLoader, ProviderId};
 use oneclient_db::dao::artifact as artifact_dao;
 use oneclient_db::dao::browser_package_update as update_dao;
 use oneclient_db::dao::cluster_bundle as bundle_dao;
@@ -21,7 +22,7 @@ use crate::ctx::ContentCtx;
 use crate::error::{ContentError, ContentResult};
 use crate::packages::dependencies::{pick_version, resolve_required, resolves_dependencies};
 use crate::packages::store::PackageStore;
-use crate::packages::types::LinkedArtifactInfo;
+use crate::packages::types::{LinkedArtifactInfo, VersionDetail};
 
 /// Matches the bundle installer's fan-out
 /// the providers are the bottleneck
@@ -245,6 +246,14 @@ async fn latest_for(
     cluster: &ClusterRow,
     ctx: &ContentCtx,
 ) -> ContentResult<Option<(String, String)>> {
+    // PolyPlus is served from the mirror, so the provider's newest release is
+    // not the newest build: the mirror carries the patched build and decides
+    if candidate.provider == ProviderId::Modrinth
+        && candidate.project_id == POLYPLUS_MODRINTH_PROJECT_ID
+    {
+        return mirror_latest_for(candidate, cluster, ctx).await;
+    }
+
     let provider = ctx.providers.get(candidate.provider)?;
     let Some(latest) = pick_version(provider, &candidate.project_id, cluster, ctx).await? else {
         return Ok(None);
@@ -271,6 +280,60 @@ async fn latest_for(
     };
 
     Ok(Some((latest.version_id, name)))
+}
+
+/// The mirror build for the cluster's game version, when it is newer than the
+/// installed bytes
+async fn mirror_latest_for(
+    candidate: &Candidate,
+    cluster: &ClusterRow,
+    ctx: &ContentCtx,
+) -> ContentResult<Option<(String, String)>> {
+    let Some(manifest) = crate::packages::mirror::load(ctx).await else {
+        return Ok(None);
+    };
+    let Some(entry) = manifest.entry_for_mc(&cluster.mc_version) else {
+        return Ok(None);
+    };
+    // the installed bytes are this build when the hash matches
+    if candidate.hash.eq_ignore_ascii_case(&entry.sha1) {
+        return Ok(None);
+    }
+    let mirror_version = crate::packages::mirror::version_number_from_file_name(&entry.file_name);
+    // an older mirror build never replaces a newer install
+    if let Some(ordering) =
+        crate::packages::mirror::compare_versions(&mirror_version, &candidate.display_version)
+        && ordering.is_lt()
+    {
+        tracing::debug!(
+            installed = %candidate.display_version,
+            mirror = %mirror_version,
+            "the mirror build is older than the installed one"
+        );
+        return Ok(None);
+    }
+    Ok(Some((
+        crate::packages::mirror::version_id_for(entry),
+        mirror_version,
+    )))
+}
+
+/// The mirror build for a cluster, shaped like a provider release
+async fn mirror_version_for(
+    cluster_id: i64,
+    ctx: &ContentCtx,
+) -> ContentResult<VersionDetail> {
+    let cluster = PackageStore::get_cluster(cluster_id, ctx).await?;
+    let manifest = crate::packages::mirror::load(ctx).await.ok_or_else(|| ContentError::InvalidData {
+        reason: "the PolyPlus mirror manifest is unreachable".to_string(),
+    })?;
+    let entry = manifest
+        .entry_for_mc(&cluster.mc_version)
+        .ok_or_else(|| ContentError::InvalidData {
+            reason: format!("the PolyPlus mirror has no build for {}", cluster.mc_version),
+        })?;
+    let loader = GameLoader::from_repr(cluster.mc_loader as u8).unwrap_or(GameLoader::Fabric);
+    Ok(crate::packages::mirror::version_from_entry(entry, loader))
 }
 
 /// Unreported rows are dropped except unreachable ones which keep their last
@@ -361,9 +424,14 @@ pub async fn apply_browser_package_update(
 
     let provider = ctx.providers.get(update.provider)?;
     let project = provider.get_project(&update.project_id, ctx).await?;
-    let version = provider
-        .get_version(&update.project_id, &update.latest_version_id, ctx)
-        .await?;
+    let version = if crate::packages::mirror::is_mirror_version(&update.latest_version_id) {
+        // the mirror build is not a provider release, so it is built from the manifest
+        mirror_version_for(update.cluster_id, ctx).await?
+    } else {
+        provider
+            .get_version(&update.project_id, &update.latest_version_id, ctx)
+            .await?
+    };
 
     let enabled_before =
         artifact_dao::get_cluster_artifact(&ctx.db, update.cluster_id, &update.hash)
