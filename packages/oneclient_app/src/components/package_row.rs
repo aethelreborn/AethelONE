@@ -350,6 +350,7 @@ fn open_package_page(
             cluster_id,
             package_type: package_type.clone(),
             package_id: format!("{}:{}", provider as u8, package_id),
+            add_to_cluster: false,
         });
     })
     .into()

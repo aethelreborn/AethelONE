@@ -1,7 +1,10 @@
 use freya::prelude::*;
 use oneclient_core::clusters::Cluster;
 
-use crate::components::{ART_PREVIEW_EDGE, DynamicArt, on_secondary, running_pill};
+use crate::components::cluster_menu::open_menu_at;
+use crate::components::{
+    ART_PREVIEW_EDGE, ClusterContextMenu, ClusterMenuTarget, DynamicArt, on_secondary, running_pill,
+};
 use crate::hooks::use_game_snapshot;
 use crate::theme::colors;
 use crate::ui::{border_all_color, last_played_label};
@@ -19,6 +22,7 @@ pub struct InstanceRow {
     selected: bool,
     on_press: EventHandler<Event<PressEventData>>,
     on_context: Option<EventHandler<(f32, f32)>>,
+    pub menu: Option<ClusterMenuTarget>,
 }
 
 impl InstanceRow {
@@ -41,6 +45,7 @@ impl InstanceRow {
             selected,
             on_press: on_press.into(),
             on_context: None,
+            menu: None,
         }
     }
 
@@ -61,6 +66,7 @@ impl InstanceRow {
             selected,
             on_press: on_press.into(),
             on_context: None,
+            menu: None,
         }
     }
 

@@ -109,7 +109,7 @@ pub use screenshots::{
 };
 pub use servers::{
     add_saved_server, invalidate_saved_servers, mark_server_joined, remove_saved_server,
-    try_saved_servers, try_server_ping, use_saved_servers, use_server_ping,
+    set_saved_server_label, try_saved_servers, try_server_ping, use_saved_servers, use_server_ping,
 };
 pub use settings_profiles::{
     try_game_profile, use_cluster_profile, use_cluster_settings, use_game_profile,

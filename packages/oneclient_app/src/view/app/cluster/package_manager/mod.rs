@@ -456,11 +456,13 @@ fn catalog_row(
         hidden: false,
         opted_in: false,
         advanced: false,
+        deleted: false,
         update_available: false,
         shadowed: false,
         outranked: false,
         seen_status: oneclient_core::SeenStatus::default(),
         essential: None,
+        modpack: None,
     }
 }
 
@@ -1009,11 +1011,13 @@ mod tests {
             hidden,
             opted_in: true,
             advanced,
+            deleted: false,
             update_available: false,
             shadowed: false,
             outranked: false,
             seen_status: oneclient_core::SeenStatus::default(),
             essential: None,
+            modpack: None,
         }
     }
 

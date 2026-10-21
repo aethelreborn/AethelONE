@@ -328,6 +328,21 @@ fn install_outcome(result: anyhow::Result<()>) -> anyhow::Result<UpdateCheck> {
     }
 }
 
+/// Debug-only shows the notify-only toast that non-self-updatable installs get
+pub fn simulate_manual_update_toast() {
+    match crate::launcher::state() {
+        Ok(state) => state
+            .services
+            .events
+            .notify("Update available")
+            .body(format!(
+                "AethelONE 9999.9999.9999 is available. Download the latest package from {RELEASES_URL} to update."
+            ))
+            .send(),
+        Err(err) => tracing::warn!("simulated update toast failed: {err:#}"),
+    }
+}
+
 fn can_self_update(kind: InstallKind) -> bool {
     if cfg!(debug_assertions) {
         return false;
