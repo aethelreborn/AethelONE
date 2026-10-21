@@ -1751,3 +1751,46 @@ NEEDS A HUMAN:
    Another session works in the same checkout (it pushed the PolyPlus mirror
    update e2309c80 while this session was running) - keep every commit to
    explicit paths and never sweep the tree with git add -A.
+
+## 2026-10-21 - The upstream merge lands (2.32.0) and the sync stops failing
+   The Upstream Sync workflow had been failing since the fork diverged: 42
+   upstream commits touched the same files the fork had changed, 24 of them in
+   the app's views, and the workflow stops at a conflict on purpose. The merge
+   was done by hand: the fork keeps its own side where the two changed the
+   same behaviour (the instance context menu with Move to group, the settings
+   search that highlights a row, the delete flow for bundle-managed mods, the
+   world snapshot and backup tools, the quick-play launch, the fork's own
+   offline accounts), and both sides are kept where they only added to the
+   same list. Upstream brings importing a modpack into an existing cluster,
+   importing from and exporting to other launchers, a graphics backend switch,
+   a cluster reset button, a warning before a bundled mod is downloaded, the
+   deleted tab in the package manager, an open-log button and a settings
+   reorganization. The .sqlx metadata came with it and the merged checked
+   queries still match it (every file's name is the hash of its own query).
+
+   The fork's own work rode along: 2.30.0 shipped Performance Mode (the JVM
+   is told how long a frame may wait, the repeated strings are stored once,
+   the low-spec mode hands the game a heap the machine can afford and the
+   video settings are written into the game's own options.txt before every
+   launch), 2.31.0 shipped the performance set (the five mods that raise the
+   frame rate the most, with one button for all the missing ones) and the
+   per-instance performance mode, and a saved server can now be given a name.
+
+   LESSON: a merge is not a merge until both sides' callers still find what
+   they call - taking the fork's side of a conflict silently drops the
+   upstream fields the upstream code constructs, and the compiler only says
+   so much later. Resolve a conflict by what the other side of the tree
+   *uses*, not by which hunk looks older. And a scripted "union" of two
+   import blocks is a trap: it happily interleaves the two `use` statements
+   into something that does not parse, so run rustfmt over every file the
+   merge touched - it is the only parser on this machine.
+
+## 2026-10-21 - The launcher says when the game asks for too much memory
+   On a small laptop the stutter is usually the system paging, not the game:
+   once the game takes more memory than the machine can give, the pages come
+   off the disk and the frames stop. The user cannot see that, so the first
+   launch of a session now says how much memory this machine can afford the
+   game before the system starts swapping, and the Performance Mode page
+   repeats it under the mode. The hint is said once, not on every launch, and
+   it stays quiet for an instance that carries mods - a pack that needs four
+   gigabytes is not the one that needs the warning.

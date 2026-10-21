@@ -333,6 +333,7 @@ fn performance_details(
     }
 
     let plan = oneclient_common::performance::plan(mode, system, mem_max, false);
+    let affordable = oneclient_common::performance::recommended_heap_mb(system);
 
     Some(
         rect()
@@ -347,6 +348,16 @@ fn performance_details(
                     .color(colors::fg_secondary())
                     .into_element()
             }))
+            .child(
+                label()
+                    .text(format!(
+                        "This machine can afford {affordable} MB for the game before the system \
+                         starts paging."
+                    ))
+                    .font_size(12.)
+                    .color(colors::fg_secondary())
+                    .into_element(),
+            )
             .child(
                 label()
                     .text("Instances that carry mods keep the memory they need.")

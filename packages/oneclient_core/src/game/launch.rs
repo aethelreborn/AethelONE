@@ -435,13 +435,33 @@ async fn start(
     let requested_heap = profile
         .mem_max
         .unwrap_or_else(oneclient_common::default_mem_max);
+    let system = oneclient_common::performance::SystemProfile::detect();
     let plan = oneclient_common::performance::plan(
         mode,
-        oneclient_common::performance::SystemProfile::detect(),
+        system,
         requested_heap,
         cluster_carries_mods(&mods_dir, &cwd),
     );
     let mem_max = plan.heap_mb.unwrap_or(requested_heap);
+
+    // A machine that has to page while the game runs stutters, and the user
+    // cannot see the paging - so say it once
+    if mode != oneclient_common::performance::PerformanceMode::LowSpec
+        && requested_heap > oneclient_common::performance::recommended_heap_mb(system)
+        && LOW_MEMORY_HINT.set(()).is_ok()
+    {
+        events
+            .notify("The game may not get enough memory")
+            .body(format!(
+                "This machine has {} of memory and the game was given {} MB. The system \
+                 starts paging when the game takes more than it can give, and paging shows up \
+                 as stutter. {} MB is what this machine can afford.",
+                system.describe(),
+                requested_heap,
+                oneclient_common::performance::recommended_heap_mb(system),
+            ))
+            .send();
+    }
 
     if mode != oneclient_common::performance::PerformanceMode::Off {
         tracing::info!(
@@ -707,6 +727,10 @@ async fn start(
 
     Ok(LaunchedGame { cluster_id, pid })
 }
+
+/// Whether the launcher has already said the game may be asking for more
+/// memory than the machine can give
+static LOW_MEMORY_HINT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 /// Whether the instance carries mods
 ///
