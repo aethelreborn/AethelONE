@@ -3,7 +3,10 @@ use std::sync::Arc;
 use freya::prelude::*;
 use oneclient_common::Patch;
 use oneclient_common::domain::GameLoader;
-use oneclient_core::settings::{GameSettingsProfile, PackageUpdateMode, ProfileUpdate, Resolution};
+use oneclient_common::performance::PerformanceMode;
+use oneclient_core::settings::{
+    GameSettingsProfile, PackageUpdateMode, ProfileUpdate, Resolution, SettingsOsExtra,
+};
 use oneclient_java::JavaRuntime;
 
 use crate::components::{
@@ -164,6 +167,14 @@ impl Component for ClusterSettings {
                             global: global
                                 .mem_max
                                 .unwrap_or_else(oneclient_common::default_mem_max),
+                        }
+                        .into_element(),
+                    )
+                    .child(
+                        PerformanceModeRow {
+                            cluster_id,
+                            os_extra: profile.os_extra.clone(),
+                            global: global.performance_mode(),
                         }
                         .into_element(),
                     )
@@ -549,6 +560,88 @@ impl Component for MemoryRow {
             IconType::Database01,
             "Memory",
             "The amount of memory in megabytes allocated for the game. Presets leave 2 GB for the system.",
+            override_cell(control, overridden, on_reset),
+        )
+    }
+}
+
+#[derive(PartialEq)]
+struct PerformanceModeRow {
+    cluster_id: i64,
+    os_extra: Option<SettingsOsExtra>,
+    global: PerformanceMode,
+}
+
+impl Component for PerformanceModeRow {
+    fn render(&self) -> impl IntoElement {
+        let cluster_id = self.cluster_id;
+        let picked = self
+            .os_extra
+            .as_ref()
+            .and_then(|extra| extra.performance_mode);
+        let overridden = picked.is_some();
+        let dispatch = use_dispatch();
+
+        let options: Vec<String> = std::iter::once("Use global".to_string())
+            .chain(
+                PerformanceMode::ALL
+                    .iter()
+                    .map(|mode| mode.label().to_string()),
+            )
+            .collect();
+
+        // The global mode stays visible even when the instance follows it
+        let current = match picked {
+            Some(mode) => mode.label().to_string(),
+            None => format!("Use global ({})", self.global.label()),
+        };
+
+        let control = {
+            let dispatch = dispatch.clone();
+            let os_extra = self.os_extra.clone();
+            Dropdown::new(current, options)
+                .width(Size::px(220.))
+                .height(Size::px(34.))
+                .on_select(move |idx: usize| {
+                    let mode = idx
+                        .checked_sub(1)
+                        .and_then(|index| PerformanceMode::ALL.get(index).copied());
+                    // Without a mode of its own the instance follows the
+                    // global setting again
+                    let update = ProfileUpdate {
+                        os_extra: Patch::Set(SettingsOsExtra {
+                            performance_mode: mode,
+                            ..os_extra.clone().unwrap_or_default()
+                        }),
+                        ..Default::default()
+                    };
+                    dispatch.update_cluster_profile(cluster_id, update);
+                })
+        };
+
+        let on_reset: EventHandler<()> = (move |()| {
+            let os_extra = self.os_extra.clone();
+            dispatch.update_cluster_profile(
+                cluster_id,
+                ProfileUpdate {
+                    os_extra: Patch::Set(SettingsOsExtra {
+                        performance_mode: None,
+                        ..os_extra.unwrap_or_default()
+                    }),
+                    ..Default::default()
+                },
+            );
+        })
+        .into();
+
+        settings_row(
+            IconType::Sliders04,
+            "Performance Mode",
+            format!(
+                "How hard the launcher works for the frame rate at launch. The global setting \
+                 is {} and applies to every instance that does not say otherwise.",
+                self.global.label()
+            ),
             override_cell(control, overridden, on_reset),
         )
     }
