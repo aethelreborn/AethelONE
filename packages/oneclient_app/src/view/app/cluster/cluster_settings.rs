@@ -619,14 +619,14 @@ impl Component for PerformanceModeRow {
                 })
         };
 
+        let reset_extra = self.os_extra.clone();
         let on_reset: EventHandler<()> = (move |()| {
-            let os_extra = self.os_extra.clone();
             dispatch.update_cluster_profile(
                 cluster_id,
                 ProfileUpdate {
                     os_extra: Patch::Set(SettingsOsExtra {
                         performance_mode: None,
-                        ..os_extra.unwrap_or_default()
+                        ..reset_extra.clone().unwrap_or_default()
                     }),
                     ..Default::default()
                 },
