@@ -69,12 +69,14 @@ impl Component for SettingsStorage {
                 .into_element(),
             )
             .child(section_header("WHAT'S USING SPACE"))
+            .maybe_child(usage_treemap(&report.categories, colors::brand()))
             .child(usage_list(
                 &report.categories,
                 colors::brand(),
                 "Nothing stored yet.",
             ))
             .child(section_header("CLUSTERS"))
+            .maybe_child(usage_treemap(&report.clusters, colors::fg_secondary()))
             .child(usage_list(
                 &report.clusters,
                 colors::fg_secondary(),
@@ -289,6 +291,68 @@ fn proportion_bar(fraction: f32, fill: Color) -> impl IntoElement {
                 .background(fill),
         )
         .into_element()
+}
+
+/// The space each entry takes, drawn as blocks whose widths are their share of
+/// the whole - the list below says the same thing in numbers
+fn usage_treemap(entries: &[StorageEntry], fill: Color) -> Option<Element> {
+    let total: u64 = entries.iter().map(|entry| entry.bytes).sum();
+    if total == 0 {
+        return None;
+    }
+
+    let blocks: Vec<Element> = entries
+        .iter()
+        .filter(|entry| entry.bytes > 0)
+        .map(|entry| {
+            let share = entry.bytes as f32 / total as f32;
+            // The bigger the block, the stronger the colour, so the eye finds
+            // the big one without reading a single number
+            let strength = (share * 2.4).clamp(0.16, 1.0);
+            let room_for_text = share > 0.06;
+
+            rect()
+                .width(Size::percent((share * 100.).clamp(0.6, 100.)))
+                .height(Size::fill())
+                .corner_radius(CornerRadius::new_all(8.))
+                .background(fill.with_a((strength * 235.) as u8))
+                .padding(Gaps::new_symmetric(8., 8.))
+                .child(
+                    rect()
+                        .vertical()
+                        .width(Size::fill())
+                        .spacing(1.)
+                        .maybe_child(room_for_text.then(|| {
+                            label()
+                                .text(entry.label.clone())
+                                .font_size(11.)
+                                .font_weight(FontWeight::MEDIUM)
+                                .max_lines(1)
+                                .color(colors::fg_primary())
+                                .into_element()
+                        }))
+                        .maybe_child(room_for_text.then(|| {
+                            label()
+                                .text(format_bytes(entry.bytes))
+                                .font_size(10.)
+                                .max_lines(1)
+                                .color(colors::fg_secondary())
+                                .into_element()
+                        })),
+                )
+                .into_element()
+        })
+        .collect();
+
+    Some(
+        rect()
+            .horizontal()
+            .width(Size::fill())
+            .height(Size::px(92.))
+            .spacing(3.)
+            .children(blocks)
+            .into_element(),
+    )
 }
 
 /// One row per entry that holds anything, bars scaled against the biggest of them
