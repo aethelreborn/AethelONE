@@ -1,3 +1,11 @@
+## 2.31.0 (2026-10-21)
+
+### Features
+
+- Every instance can now pick its own Performance Mode: the instance settings carry a Performance Mode row that offers the global setting or a mode of its own, so a heavy pack can keep the memory it needs while a plain instance on the same machine runs the low-spec mode. An instance that overrides one setting now inherits the rest of the global ones instead of losing them.
+- The Mods page of an instance now opens with a Performance set: the five mods that raise the frame rate the most - Sodium, Lithium, ImmediatelyFast, FerriteCore and Entity Culling - each with its own install button and one button that installs everything the instance is missing. The set only offers what the instance's loader and game version can actually run, the mods it already carries are marked as installed, and nothing is installed without a click.
+- PolyPlus now updates itself in the launcher. The launcher used to ask Modrinth for the newest PolyPlus release, and that release never carries the patched build, so the mod stayed on whatever version it was installed with. The mirror manifest decides instead: the newest build for the instance's game version is offered as a normal mod update, it is applied with the launcher's own auto-update mode before a launch, and the patched jar is the one that lands in the instance.
+
 ## 2.30.0 (2026-10-21)
 
 ### Features
