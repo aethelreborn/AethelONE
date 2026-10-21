@@ -494,7 +494,8 @@ mod tests {
 
     #[test]
     fn a_mirror_build_gets_a_version_id_of_its_own() {
-        let entry = manifest().entry_for_mc("26.1").expect("entry exists");
+        let manifest = manifest();
+        let entry = manifest.entry_for_mc("26.1").expect("entry exists");
 
         assert_eq!(version_id_for(entry), "mirror:bbb222");
         assert!(is_mirror_version(&version_id_for(entry)));
@@ -524,7 +525,8 @@ mod tests {
 
     #[test]
     fn a_mirror_build_is_shaped_like_a_provider_release() {
-        let entry = manifest().entry_for_mc("1.21.11").expect("entry exists");
+        let manifest = manifest();
+        let entry = manifest.entry_for_mc("1.21.11").expect("entry exists");
 
         let version = version_from_entry(entry, GameLoader::Fabric);
 
