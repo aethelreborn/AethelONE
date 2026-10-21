@@ -193,34 +193,31 @@ component (`view/app/**`) → route/nav/palette wiring if it is a page.
 
 ## 7. Where everything shipped (summary)
 
-Iterations 1–14 are complete and released: **2.18.0 → 2.30.0**. Release
-2.30.0 (Performance Mode — the launcher now tunes the JVM, the heap and the
-game's own video settings instead of only promising to, commit `e7ee5d4d`,
-release commit `742d0c8e`, 18 assets) was cut on 2026-10-21 from the new
-Windows machine. Full table with commits, versions, test counts and lessons:
-`ITERATIONS.md`. Audit trail with per-wave lessons: `AUDIT.txt`.
+Iterations 1–18 are complete: **2.18.0 → 2.32.0**. 2.30.0 shipped
+Performance Mode (the launcher now tunes the JVM, the heap and the game's own
+video settings instead of only promising to, commit `e7ee5d4d`), 2.31.0
+shipped the performance set and the per-instance performance mode, and 2.32.0
+carries the upstream merge and the named saved servers. Full table with
+commits, versions, test counts and lessons: `ITERATIONS.md`. Audit trail with
+per-wave lessons: `AUDIT.txt`.
 
 ## 8. Exact resume point
 
-- Local `main`: the release commits of 2.30.0 (`742d0c8e`) plus the
-  performance-set commit `9c103fca`. Run `git pull origin main` to be current.
+- Local `main`: the upstream merge (`863679fc`) plus the fixes that made it
+  compile (`cf0d0864`, `e1118c54`, `9b8808e7`, `e418b4ef`, `d6a82702`). Run
+  `git pull origin main` to be current.
 - PolyPlus: untouched, healthy, `0175d8f`, polydium pinned `1.1.2`.
-- **The upstream sync has been failing since 2026-10-21**: merging
-  `Polyfrost/OneLauncher` upstream conflicts in ~15 files (the fork has
-  diverged a lot). The release workflow was dispatched directly instead
-  (`gh workflow run oneclient_release.yml`), then the draft was published by
-  hand and `changelog_publish.yml` was dispatched. Resolving that merge is
-  the biggest open chore.
-- **Next iteration = 15** (the performance set is committed and waiting for
-  its release, the per-instance mode is written and waiting for its commit).
-  Candidate backlog (in rough priority order):
-  1. Release the performance set (2.31.0) and the per-instance mode (2.32.0).
-  2. Resolve the upstream merge so the sync stops failing.
-  3. Editable saved-server labels (column exists, no UI sets it yet).
-  4. Pending bundle/package updates preview ("what will change") before launch sync.
-  5. Storage page: visual size treemap / top consumers.
-  6. Mods page: grouping/tabs polish (Updates-first view).
-  7. Session timeline follow-ups if users want zoom/range control.
+- **The upstream sync should work again**: the merge resolved the conflicts
+  that stopped it for days. The next scheduled run (every 6 hours) merges
+  upstream cleanly.
+- **Next iteration = 19.** Candidate backlog (in rough priority order):
+  1. Finish the 2.32.0 release (the draft needs a rebuild with the merge
+     fixes, then publish it and refresh changelog.json).
+  2. Pending bundle/package updates preview ("what will change") before launch sync.
+  3. Storage page: visual size treemap / top consumers.
+  4. Mods page: grouping/tabs polish (Updates-first view).
+  5. Session timeline follow-ups if users want zoom/range control.
+  6. Editable saved-server labels are done - the server names shipped.
   Research fresh candidates too — the loop allows any scope.
 - Also polish candidates: server rows drag-to-reorder; groups on Home;
   relative-time refresh on servers page; heatmap tooltip improvements.
