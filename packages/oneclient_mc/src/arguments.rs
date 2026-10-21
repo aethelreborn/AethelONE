@@ -855,7 +855,13 @@ mod tests {
 
     #[test]
     fn unrelated_custom_arguments_leave_the_collector_alone() {
-        let flags = performance_flags(21, "amd64", 4096, &custom("-Dfoo=bar -Xss1M"));
+        let flags = performance_flags(
+            21,
+            "amd64",
+            4096,
+            &custom("-Dfoo=bar -Xss1M"),
+            PerformanceMode::Off,
+        );
         assert!(flags.contains(&"-XX:+UseG1GC".to_string()));
     }
 
