@@ -1,3 +1,7 @@
+// The import path nests its awaits deeply enough that the layout of the async
+// block needs more room than the default recursion limit gives it
+#![recursion_limit = "256"]
+
 //! Detects Prism / MultiMC / Modrinth App installs and imports every instance
 //! into a throwaway launcher dir under `target/`
 //!
