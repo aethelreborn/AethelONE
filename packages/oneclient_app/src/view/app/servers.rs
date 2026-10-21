@@ -7,9 +7,9 @@ use oneclient_core::servers::{SavedServerRow, matches_saved};
 use crate::components::{Button, Dropdown, Icon, IconType, ScrollArea, TextInput};
 use crate::hooks::{
     add_saved_server, invalidate_saved_servers, mark_server_joined, query_is_loading,
-    remove_saved_server, settled_or_loading, try_global_analytics, try_saved_servers,
-    try_server_ping, use_active_cluster_id, use_clusters, use_dispatch, use_global_analytics,
-    use_saved_servers, use_server_ping,
+    remove_saved_server, set_saved_server_label, settled_or_loading, try_global_analytics,
+    try_saved_servers, try_server_ping, use_active_cluster_id, use_clusters, use_dispatch,
+    use_global_analytics, use_saved_servers, use_server_ping,
 };
 use crate::theme::colors;
 use crate::ui::{border_all_color, centered_note};
@@ -192,6 +192,34 @@ struct ServerRow {
     stat: Option<ServerStat>,
 }
 
+/// Writes the name a server was given, a blank name takes the name away
+fn save_server_name(
+    draft: State<String>,
+    editing: State<bool>,
+    server_id: i64,
+    dispatch: crate::Actions,
+) -> impl FnMut() {
+    move || {
+        let value = draft.read().trim().to_string();
+        editing.set(false);
+        let dispatch = dispatch.clone();
+        spawn(async move {
+            let label = if value.is_empty() {
+                None
+            } else {
+                Some(value.as_str())
+            };
+            if let Err(err) = set_saved_server_label(server_id, label).await {
+                dispatch
+                    .notify("Couldn't rename server")
+                    .body(err.to_string())
+                    .error()
+                    .send();
+            }
+        });
+    }
+}
+
 impl Component for ServerRow {
     fn render(&self) -> impl IntoElement {
         let ping = use_server_ping(self.server.address.clone());
@@ -242,6 +270,14 @@ impl Component for ServerRow {
             .clone()
             .unwrap_or_else(|| self.server.address.clone());
         let show_address = self.server.label.is_some();
+
+        // The name a server is given is edited in place
+        let server_id = self.server.id;
+        let current_label = self.server.label.clone().unwrap_or_default();
+        let mut editing = use_state(|| false);
+        let mut draft = use_state(String::new);
+        let mut save = save_server_name(draft, editing, server_id, dispatch.clone());
+        let mut save_submit = save_server_name(draft, editing, server_id, dispatch.clone());
 
         let history = self.stat.as_ref().map(|stat| {
             let mut parts = vec![if stat.joins == 1 {
@@ -297,13 +333,21 @@ impl Component for ServerRow {
                     .vertical()
                     .width(Size::flex(1.0))
                     .spacing(2.)
-                    .child(
+                    .child(if *editing.read() {
+                        TextInput::new(draft)
+                            .placeholder("Name this server")
+                            .auto_focus(true)
+                            .on_submit(move |_| save_submit())
+                            .width(Size::fill())
+                            .into_element()
+                    } else {
                         label()
                             .text(name)
                             .font_size(14.)
                             .font_weight(FontWeight::MEDIUM)
-                            .color(colors::fg_primary()),
-                    )
+                            .color(colors::fg_primary())
+                            .into_element()
+                    })
                     .maybe_child(show_address.then(|| {
                         label()
                             .text(self.server.address.clone())
@@ -371,6 +415,32 @@ impl Component for ServerRow {
                     })
                     .child(Icon::new(IconType::Play).size(14.))
                     .text("Join"),
+            )
+            .child(
+                Button::new()
+                    .ghost()
+                    .icon()
+                    .tooltip(if *editing.read() {
+                        "Save the name"
+                    } else {
+                        "Name this server"
+                    })
+                    .on_press(move |_| {
+                        if *editing.read() {
+                            save();
+                            return;
+                        }
+                        draft.set(current_label.clone());
+                        editing.set(true);
+                    })
+                    .child(
+                        Icon::new(if *editing.read() {
+                            IconType::Check
+                        } else {
+                            IconType::Pencil01
+                        })
+                        .size(14.),
+                    ),
             )
             .child(
                 Button::new()

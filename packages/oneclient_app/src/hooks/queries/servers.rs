@@ -86,6 +86,14 @@ pub async fn remove_saved_server(id: i64) -> Result<(), LauncherError> {
     Ok(())
 }
 
+/// Names a saved server, an empty name takes the name away again
+pub async fn set_saved_server_label(id: i64, label: Option<&str>) -> Result<(), LauncherError> {
+    let state = crate::launcher::state()?;
+    servers::set_saved_server_label(&state.services.db, id, label).await?;
+    invalidate_saved_servers().await;
+    Ok(())
+}
+
 pub async fn mark_server_joined(id: i64) -> Result<(), LauncherError> {
     let state = crate::launcher::state()?;
     let at = chrono::Utc::now().to_rfc3339();

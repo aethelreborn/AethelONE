@@ -57,6 +57,26 @@ pub async fn mark_joined(pool: &SqlitePool, id: i64, at: &str) -> Result<(), sql
     Ok(())
 }
 
+/// Renames a saved server, a missing name takes the name away again
+pub async fn set_label(
+    pool: &SqlitePool,
+    id: i64,
+    label: Option<&str>,
+) -> Result<SavedServerRow, sqlx::Error> {
+    sqlx::query_as::<_, SavedServerRow>(
+        r#"
+		UPDATE saved_servers
+		SET label = ?
+		WHERE id = ?
+		RETURNING id, address, label, created_at, last_joined_at
+		"#,
+    )
+    .bind(label)
+    .bind(id)
+    .fetch_one(pool)
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +132,22 @@ mod tests {
             !remove(&pool, second.id).await.unwrap(),
             "idempotent enough"
         );
+        assert_eq!(list_all(&pool).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_server_can_be_renamed_and_the_name_taken_away() {
+        let pool = pool().await;
+
+        let added = add(&pool, "play.example.com", None).await.unwrap();
+        assert!(added.label.is_none());
+
+        let renamed = set_label(&pool, added.id, Some("Hypixel")).await.unwrap();
+        assert_eq!(renamed.label.as_deref(), Some("Hypixel"));
+        assert_eq!(renamed.address, "play.example.com");
+
+        let cleared = set_label(&pool, added.id, None).await.unwrap();
+        assert!(cleared.label.is_none());
         assert_eq!(list_all(&pool).await.unwrap().len(), 1);
     }
 }

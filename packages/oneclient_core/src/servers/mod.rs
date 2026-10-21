@@ -37,6 +37,17 @@ pub async fn remove_saved_server(db: &DbPool, id: i64) -> LauncherResult<bool> {
     Ok(server_dao::remove(db, id).await?)
 }
 
+/// Names a saved server, an empty name takes the name away again
+pub async fn set_saved_server_label(
+    db: &DbPool,
+    id: i64,
+    label: Option<&str>,
+) -> LauncherResult<SavedServerRow> {
+    let label = label.map(str::trim).filter(|label| !label.is_empty());
+
+    Ok(server_dao::set_label(db, id, label).await?)
+}
+
 pub async fn mark_server_joined(db: &DbPool, id: i64, at: &str) -> LauncherResult<()> {
     Ok(server_dao::mark_joined(db, id, at).await?)
 }
@@ -153,5 +164,31 @@ mod tests {
                 .is_err()
         );
         assert!(list_saved_servers(&pool).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_server_can_be_renamed_and_the_name_taken_away() {
+        let pool = pool().await;
+
+        let added = add_saved_server(&pool, "play.example.com", None)
+            .await
+            .unwrap();
+
+        let named = set_saved_server_label(&pool, added.id, Some("  Hypixel  "))
+            .await
+            .unwrap();
+        assert_eq!(
+            named.label.as_deref(),
+            Some("Hypixel"),
+            "the name is trimmed"
+        );
+
+        let unnamed = set_saved_server_label(&pool, added.id, Some("   "))
+            .await
+            .unwrap();
+        assert!(
+            unnamed.label.is_none(),
+            "a blank name takes the name away rather than storing spaces"
+        );
     }
 }
