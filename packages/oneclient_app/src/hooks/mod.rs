@@ -83,7 +83,7 @@ pub use queries::{
 };
 pub use queries::{
     add_saved_server, invalidate_saved_servers, mark_server_joined, remove_saved_server,
-    try_saved_servers, try_server_ping, use_saved_servers, use_server_ping,
+    set_saved_server_label, try_saved_servers, try_server_ping, use_saved_servers, use_server_ping,
 };
 pub use queries::{
     add_world_datapacks, backup_world, delete_world, delete_world_datapack, delete_world_snapshot,
