@@ -1794,3 +1794,20 @@ NEEDS A HUMAN:
    repeats it under the mode. The hint is said once, not on every launch, and
    it stays quiet for an instance that carries mods - a pack that needs four
    gigabytes is not the one that needs the warning.
+
+## 2026-10-21 - The storage page draws what uses the space (2.34.0)
+   The storage page listed every category and every cluster with a bar
+   against the biggest one, which takes reading to compare. The categories and
+   the clusters are now drawn as blocks whose widths are their share of the
+   whole, and the bigger the block the stronger the colour, so the one that
+   eats the disk is the one the eye lands on. The numbers stay underneath and
+   a block too small for its name stays empty instead of spilling into its
+   neighbour. 2.33.0 shipped the memory hint next to it: the first launch of
+   a session says how much memory this machine can afford the game before the
+   system starts paging, because on a small laptop the paging is what the
+   stutter is.
+
+   LESSON: a picture and a list are not the same thing - the picture is for
+   the one question ("what is eating the disk?") and the list is for the rest,
+   so the picture may drop everything that does not fit and the numbers must
+   still be there.
