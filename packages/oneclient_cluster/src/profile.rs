@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use oneclient_common::performance::PerformanceMode;
 use oneclient_db::models::SettingProfileRow;
 
 pub const GLOBAL_PROFILE_NAME: &str = "Global";
@@ -34,6 +35,9 @@ pub struct SettingsOsExtra {
     pub enable_gamemode: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu: Option<String>,
+    /// How hard the launcher works for the frame rate at launch
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub performance_mode: Option<PerformanceMode>,
     #[serde(flatten)]
     pub unknown: serde_json::Map<String, serde_json::Value>,
 }
@@ -44,6 +48,7 @@ impl Default for SettingsOsExtra {
             #[cfg(target_os = "linux")]
             enable_gamemode: Some(true),
             gpu: None,
+            performance_mode: None,
             unknown: serde_json::Map::new(),
         }
     }
@@ -70,6 +75,14 @@ impl GameSettingsProfile {
 
     pub fn gpu(&self) -> Option<&str> {
         self.os_extra.as_ref()?.gpu.as_deref()
+    }
+
+    /// The performance mode this profile asks for, off when it never said
+    pub fn performance_mode(&self) -> PerformanceMode {
+        self.os_extra
+            .as_ref()
+            .and_then(|extra| extra.performance_mode)
+            .unwrap_or_default()
     }
 
     pub fn is_global(&self) -> bool {

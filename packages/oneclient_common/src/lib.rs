@@ -8,6 +8,7 @@ pub mod memory;
 pub mod os_ext;
 pub mod patch;
 pub mod paths;
+pub mod performance;
 pub mod process;
 pub mod search;
 pub mod version;
@@ -18,9 +19,12 @@ pub use domain::{
     ContentType, GameLoader, HashAlgorithm, PackageUpdateMode, ProviderId, Resolution,
 };
 pub use error::{PathsError, PathsResult};
-pub use memory::{MEMORY_HEADROOM_GB, default_mem_max, default_mem_max_for_total, total_ram_mb};
+pub use memory::{
+    MEMORY_HEADROOM_GB, default_mem_max, default_mem_max_for_total, total_cores, total_ram_mb,
+};
 pub use os_ext::OsExt;
 pub use patch::Patch;
+pub use performance::{PerformanceMode, PerformancePlan, SystemProfile, plan};
 pub use search::{MatchScore, SearchQuery, normalize_query};
 pub use version::{
     ParsedMcVersion, VersionKey, format_mc_version, parse_mc_version, supports_quick_play,

@@ -11,6 +11,7 @@ use crate::rules::validate_rules;
 use oneclient_common::Resolution;
 use oneclient_common::constants::{self, DUMMY_REPLACE_NEWLINE};
 use oneclient_common::paths;
+use oneclient_common::performance::PerformanceMode;
 
 #[allow(clippy::too_many_arguments)]
 pub fn java_arguments(
@@ -23,6 +24,7 @@ pub fn java_arguments(
     custom_args: String,
     java_arch: &str,
     java_major: u32,
+    mode: PerformanceMode,
 ) -> McResult<Vec<String>> {
     let mut parsed = Vec::new();
     if let Some(args) = arguments {
@@ -60,7 +62,9 @@ pub fn java_arguments(
 
     let custom = split_custom_args(&custom_args);
 
-    parsed.extend(performance_flags(java_major, java_arch, mem_max, &custom));
+    parsed.extend(performance_flags(
+        java_major, java_arch, mem_max, &custom, mode,
+    ));
 
     if java_major >= 21 {
         parsed.push("--add-modules=jdk.incubator.vector".to_string());
@@ -76,12 +80,17 @@ const ZGC_MIN_HEAP_MB: u32 = 8192;
 
 const INITIAL_HEAP_MB: u32 = 512;
 
+/// The pause the collector aims for while the performance mode is on: a frame
+/// is never held back for longer than this
+const PAUSE_TARGET_MS: u32 = 50;
+
 #[must_use]
 pub fn performance_flags(
     java_major: u32,
     java_arch: &str,
     mem_max: u32,
     custom_args: &[String],
+    mode: PerformanceMode,
 ) -> Vec<String> {
     let mut flags = vec![format!("-Xms{}M", mem_max.min(INITIAL_HEAP_MB))];
 
@@ -109,7 +118,27 @@ pub fn performance_flags(
         flags.push("-XX:+UseCompactObjectHeaders".to_string());
     }
 
+    if mode != PerformanceMode::Off {
+        // The collector is told how long a frame may be held back: the game
+        // feels smoother when a collection never sits on a frame for long
+        flags.push(format!("-XX:MaxGCPauseMillis={PAUSE_TARGET_MS}"));
+
+        // The same strings the game holds over and over are stored once, and
+        // the memory that frees is memory the game does not have to fight the
+        // system for
+        if (use_g1 || custom_uses_g1(custom_args)) && java_major >= 9 {
+            flags.push("-XX:+UseStringDeduplication".to_string());
+        }
+    }
+
     flags
+}
+
+/// The user may have picked the collector themselves
+fn custom_uses_g1(custom_args: &[String]) -> bool {
+    custom_args
+        .iter()
+        .any(|arg| arg.starts_with("-XX:+") && arg.contains("UseG1GC"))
 }
 
 fn is_collector_flag(arg: &str) -> bool {
@@ -657,6 +686,7 @@ mod tests {
         supports_quick_play,
     };
     use oneclient_common::Resolution;
+    use oneclient_common::performance::PerformanceMode;
 
     #[test]
     fn blank_input_contributes_nothing() {
@@ -712,7 +742,7 @@ mod tests {
     }
 
     fn flags(java_major: u32, java_arch: &str, mem_max: u32) -> Vec<String> {
-        performance_flags(java_major, java_arch, mem_max, &[])
+        performance_flags(java_major, java_arch, mem_max, &[], PerformanceMode::Off)
     }
 
     fn custom(args: &str) -> Vec<String> {
@@ -806,7 +836,7 @@ mod tests {
             "-XX:+UseShenandoahGC",
             "-XX:-UseG1GC",
         ] {
-            let flags = performance_flags(21, "amd64", 16384, &custom(arg));
+            let flags = performance_flags(21, "amd64", 16384, &custom(arg), PerformanceMode::Off);
             assert!(
                 !flags.iter().any(|f| is_collector_flag(f)),
                 "{arg} should leave the collector entirely to the user"
@@ -932,6 +962,89 @@ mod tests {
     #[test]
     fn a_java_7_runtime_is_left_untouched() {
         assert_eq!(flags(7, "amd64", 4096), vec!["-Xms512M"]);
+    }
+
+    #[test]
+    fn the_performance_mode_asks_the_collector_for_short_pauses() {
+        for mode in [PerformanceMode::Balanced, PerformanceMode::LowSpec] {
+            let flags = performance_flags(21, "amd64", 2048, &[], mode);
+
+            assert!(
+                flags.contains(&"-XX:MaxGCPauseMillis=50".to_string()),
+                "{mode:?} must tell the collector how long a frame may wait"
+            );
+        }
+    }
+
+    #[test]
+    fn the_performance_mode_stores_the_repeated_strings_once() {
+        let flags = performance_flags(21, "amd64", 2048, &[], PerformanceMode::LowSpec);
+
+        assert!(
+            flags.contains(&"-XX:+UseStringDeduplication".to_string()),
+            "the memory the game frees is memory the system does not page for"
+        );
+    }
+
+    #[test]
+    fn the_string_deduplication_stays_with_the_collector_that_supports_it() {
+        let zgc = performance_flags(21, "amd64", 16384, &[], PerformanceMode::Balanced);
+        assert!(
+            !zgc.contains(&"-XX:+UseStringDeduplication".to_string()),
+            "only the collector that is known to support it gets the flag"
+        );
+
+        let serial = performance_flags(
+            21,
+            "amd64",
+            4096,
+            &custom("-XX:+UseSerialGC"),
+            PerformanceMode::Balanced,
+        );
+        assert!(
+            !serial.contains(&"-XX:+UseStringDeduplication".to_string()),
+            "a collector the user picked is left alone"
+        );
+    }
+
+    #[test]
+    fn an_old_runtime_is_not_asked_for_string_deduplication() {
+        let flags = performance_flags(8, "amd64", 2048, &[], PerformanceMode::Balanced);
+
+        assert!(
+            !flags.contains(&"-XX:+UseStringDeduplication".to_string()),
+            "java 8 does not know the flag"
+        );
+    }
+
+    #[test]
+    fn the_collector_the_user_picked_still_gets_the_pause_target() {
+        let flags = performance_flags(
+            21,
+            "amd64",
+            4096,
+            &custom("-XX:+UseSerialGC"),
+            PerformanceMode::LowSpec,
+        );
+
+        assert!(
+            flags.contains(&"-XX:MaxGCPauseMillis=50".to_string()),
+            "the pause target is the collector's own, it costs the user nothing"
+        );
+        assert!(
+            !flags.iter().any(|f| is_collector_flag(f)),
+            "the collector stays the one the user picked"
+        );
+    }
+
+    #[test]
+    fn the_turned_off_mode_adds_nothing_at_all() {
+        for major in [8, 17, 21, 25] {
+            let off = performance_flags(major, "amd64", 2048, &[], PerformanceMode::Off);
+
+            assert!(!off.iter().any(|f| f.contains("MaxGCPauseMillis")));
+            assert!(!off.iter().any(|f| f.contains("StringDeduplication")));
+        }
     }
 
     fn install_jars(tag: &str, jars: &[&str]) -> (std::path::PathBuf, std::path::PathBuf) {
@@ -1115,6 +1228,7 @@ mod tests {
             String::new(),
             "arm64",
             21,
+            PerformanceMode::Off,
         )
         .unwrap();
 
@@ -1143,6 +1257,7 @@ mod tests {
             String::new(),
             "aarch64",
             25,
+            PerformanceMode::Off,
         )
         .unwrap();
 

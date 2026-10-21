@@ -1,4 +1,4 @@
-use sysinfo::{MemoryRefreshKind, RefreshKind, System};
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
 pub const MEMORY_HEADROOM_GB: u32 = 2;
 
@@ -13,6 +13,27 @@ pub fn total_ram_mb() -> u32 {
             RefreshKind::nothing().with_memory(MemoryRefreshKind::nothing().with_ram()),
         );
         (system.total_memory() / 1024 / 1024).min(u32::MAX as u64) as u32
+    })
+}
+
+/// The logical cores the machine has, the other half of what a game can be
+/// given before it starts fighting the system for the processor
+pub fn total_cores() -> u32 {
+    static TOTAL_CORES: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+
+    *TOTAL_CORES.get_or_init(|| {
+        let system =
+            System::new_with_specifics(RefreshKind::nothing().with_cpu(CpuRefreshKind::nothing()));
+
+        let detected = system.cpus().len() as u32;
+        if detected > 0 {
+            return detected;
+        }
+
+        // A machine that reports no processor at all still has one
+        std::thread::available_parallelism()
+            .map(|cores| cores.get() as u32)
+            .unwrap_or(1)
     })
 }
 

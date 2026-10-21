@@ -397,21 +397,63 @@ async fn start(
         updated,
     )?;
 
+    let mods_dir = paths::cluster_mods_dir(&cluster.folder_name)?;
+
+    // The performance mode is the launcher's own tuning: how long the garbage
+    // collector may hold a frame, how much memory the game is given and the
+    // video settings it starts with. A pack that needs its memory keeps it.
+    let mode = profile.performance_mode();
+    let requested_heap = profile
+        .mem_max
+        .unwrap_or_else(oneclient_common::default_mem_max);
+    let plan = oneclient_common::performance::plan(
+        mode,
+        oneclient_common::performance::SystemProfile::detect(),
+        requested_heap,
+        cluster_carries_mods(&mods_dir, &cwd),
+    );
+    let mem_max = plan.heap_mb.unwrap_or(requested_heap);
+
+    if mode != oneclient_common::performance::PerformanceMode::Off {
+        tracing::info!(
+            cluster_id,
+            mode = mode.as_str(),
+            heap_mb = mem_max,
+            settings = plan.options.len(),
+            "performance mode"
+        );
+    }
+
+    if !plan.options.is_empty() && !dedicated {
+        match oneclient_cluster::configs::apply_options_overrides(&cwd, &plan.options) {
+            Ok(applied) => {
+                tracing::info!(
+                    cluster_id,
+                    applied,
+                    "performance mode: video settings written"
+                )
+            }
+            Err(err) => tracing::warn!(
+                cluster_id,
+                error = %err,
+                "performance mode: could not write the video settings"
+            ),
+        }
+    }
+
     let mut jvm_args = arguments::java_arguments(
         arg_map.get(&ArgumentType::Jvm).map(Vec::as_slice),
         &natives,
         &libraries,
         &classpaths,
         &version_name,
-        profile
-            .mem_max
-            .unwrap_or_else(oneclient_common::default_mem_max),
+        mem_max,
         custom_args.clone(),
         &java.os_arch,
         java.major,
+        mode,
     )?;
 
-    let mods_dir = paths::cluster_mods_dir(&cluster.folder_name)?;
     if let Some(arg) = crate::game::mods_folder_argument(
         cluster.mc_loader,
         loader_version_id,
@@ -626,6 +668,27 @@ async fn start(
     });
 
     Ok(LaunchedGame { cluster_id, pid })
+}
+
+/// Whether the instance carries mods
+///
+/// A pack that needs four gigabytes is never handed a smaller heap, no matter
+/// how weak the machine is, so the launcher has to know before it caps
+/// anything
+fn cluster_carries_mods(mods_dir: &Path, game_dir: &Path) -> bool {
+    let dirs = [mods_dir.to_path_buf(), game_dir.join("mods")];
+
+    dirs.iter().any(|dir| {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return false;
+        };
+
+        entries.flatten().any(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.ends_with(".jar") || name.ends_with(".zip")
+        })
+    })
 }
 
 /// What the crash report suggests and who to offer to switch off

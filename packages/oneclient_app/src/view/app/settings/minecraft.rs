@@ -1,5 +1,6 @@
 use freya::prelude::*;
 use oneclient_common::Patch;
+use oneclient_common::performance::{PerformanceMode, SystemProfile};
 use oneclient_core::settings::{
     GameSettingsProfile, PackageUpdateMode, ProfileUpdate, Resolution, SettingsOsExtra,
 };
@@ -71,6 +72,12 @@ impl Component for SettingsMinecraft {
             move || v
         });
 
+        let performance_mode = use_state({
+            let v = profile.performance_mode();
+            move || v
+        });
+        let system = SystemProfile::detect();
+
         let gpu = use_state({
             let v = profile.gpu().map(str::to_owned);
             move || v
@@ -97,7 +104,7 @@ impl Component for SettingsMinecraft {
                 return;
             }
 
-            let update = with_gpu(update, selected_gpu);
+            let update = with_os_extra(update, selected_gpu, *performance_mode.read());
 
             dispatch.update_global_profile(update);
         });
@@ -150,6 +157,22 @@ impl Component for SettingsMinecraft {
                     memory,
                     String::new(),
                 ),
+            ))
+            .child(settings_row_focus(
+                "minecraft.performance",
+                IconType::Sliders04,
+                "Performance Mode",
+                performance_description(*performance_mode.read(), system),
+                resettable(
+                    performance_field(performance_mode),
+                    performance_mode,
+                    PerformanceMode::Off,
+                ),
+            ))
+            .maybe_child(performance_details(
+                *performance_mode.read(),
+                system,
+                profile.mem_max.unwrap_or_else(oneclient_common::default_mem_max),
             ))
             .child(settings_row(
                 IconType::Terminal,
@@ -254,14 +277,85 @@ impl Component for SettingsMinecraft {
     }
 }
 
-fn with_gpu(mut update: ProfileUpdate, gpu: Option<String>) -> ProfileUpdate {
+fn with_os_extra(
+    mut update: ProfileUpdate,
+    gpu: Option<String>,
+    performance_mode: PerformanceMode,
+) -> ProfileUpdate {
     let base = crate::launcher::state()
         .ok()
         .and_then(|state| state.settings.read().global_game_settings.os_extra.clone())
         .unwrap_or_default();
 
-    update.os_extra = Patch::Set(SettingsOsExtra { gpu, ..base });
+    update.os_extra = Patch::Set(SettingsOsExtra {
+        gpu,
+        performance_mode: Some(performance_mode),
+        ..base
+    });
     update
+}
+
+/// The dropdown that picks how hard the launcher works for the frame rate
+fn performance_field(mut selected: State<PerformanceMode>) -> impl IntoElement {
+    let labels: Vec<String> = PerformanceMode::ALL
+        .iter()
+        .map(|mode| mode.label().to_string())
+        .collect();
+
+    Dropdown::new(selected.read().label(), labels)
+        .width(Size::px(160.))
+        .height(Size::px(34.))
+        .on_select(move |idx: usize| {
+            if let Some(mode) = PerformanceMode::ALL.get(idx).copied() {
+                selected.set(mode);
+            }
+        })
+}
+
+/// What the mode does, and what this machine could do with
+fn performance_description(mode: PerformanceMode, system: SystemProfile) -> String {
+    format!(
+        "{}. This machine: {}. Recommended here: {}.",
+        mode.summary(),
+        system.describe(),
+        system.recommended_mode().label()
+    )
+}
+
+/// Every change the mode makes, spelled out under the row
+fn performance_details(
+    mode: PerformanceMode,
+    system: SystemProfile,
+    mem_max: u32,
+) -> Option<Element> {
+    if mode == PerformanceMode::Off {
+        return None;
+    }
+
+    let plan = oneclient_common::performance::plan(mode, system, mem_max, false);
+
+    Some(
+        rect()
+            .vertical()
+            .width(Size::fill())
+            .spacing(4.)
+            .padding(Gaps::new(0., 8., 8., 44.))
+            .children(plan.notes().into_iter().map(|note| {
+                label()
+                    .text(note)
+                    .font_size(12.)
+                    .color(colors::fg_secondary())
+                    .into_element()
+            }))
+            .child(
+                label()
+                    .text("Instances that carry mods keep the memory they need.")
+                    .font_size(12.)
+                    .color(colors::fg_secondary())
+                    .into_element(),
+            )
+            .into_element(),
+    )
 }
 
 fn gpu_field(

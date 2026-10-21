@@ -112,6 +112,51 @@ pub fn write_config_file(cluster: &Cluster, rel: &str, content: &str) -> Cluster
     Ok(())
 }
 
+/// The game's own video settings live in this file next to the instance
+pub const OPTIONS_FILE: &str = "options.txt";
+
+/// Writes the launcher's own video settings into the game's options file
+///
+/// The game reads the file once at startup and writes back what it read, so a
+/// setting that is not written here comes back with the value the game had
+/// before the launch
+pub fn apply_options_overrides(
+    game_dir: &Path,
+    overrides: &[(String, String)],
+) -> ClusterResult<usize> {
+    if overrides.is_empty() {
+        return Ok(0);
+    }
+
+    let path = game_dir.join(OPTIONS_FILE);
+
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> = existing.lines().map(str::to_string).collect();
+
+    for (key, value) in overrides {
+        let prefix = format!("{key}:");
+        match lines.iter_mut().find(|line| line.starts_with(&prefix)) {
+            Some(line) => *line = format!("{prefix}{value}"),
+            None => lines.push(format!("{prefix}{value}")),
+        }
+    }
+
+    let mut content = lines.join("\n");
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+
+    // Write beside then rename so the game never reads half a file
+    let tmp = path.with_extension("txt.tmp");
+    std::fs::write(&tmp, content)?;
+    if let Err(err) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err.into());
+    }
+
+    Ok(overrides.len())
+}
+
 fn collect_configs(base: &Path, dir: &Path, out: &mut Vec<ConfigFileInfo>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -390,5 +435,65 @@ mod tests {
             .collect();
         assert!(!listed.contains(&"config/big.json".to_string()));
         assert!(read_config_file(&cluster, "config/big.json").is_err());
+    }
+
+    #[test]
+    fn the_video_settings_replace_the_ones_the_game_had() {
+        let _guard = lock();
+        seed();
+
+        let applied = apply_options_overrides(
+            &base_dir(),
+            &[
+                ("renderDistance".to_string(), "6".to_string()),
+                ("particles".to_string(), "minimal".to_string()),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(applied, 2);
+        let written = std::fs::read_to_string(base_dir().join("options.txt")).unwrap();
+        assert!(written.contains("renderDistance:6"), "{written}");
+        assert!(written.contains("particles:minimal"), "{written}");
+        assert!(written.contains("fov:0.5"), "{written}");
+    }
+
+    #[test]
+    fn a_setting_the_game_never_had_is_added() {
+        let _guard = lock();
+        seed();
+
+        apply_options_overrides(&base_dir(), &[("cloudStatus".to_string(), "false".to_string())])
+            .unwrap();
+
+        let written = std::fs::read_to_string(base_dir().join("options.txt")).unwrap();
+        assert!(written.contains("cloudStatus:false"), "{written}");
+    }
+
+    #[test]
+    fn an_instance_without_an_options_file_gets_one() {
+        let _guard = lock();
+        seed();
+        std::fs::remove_file(base_dir().join("options.txt")).unwrap();
+
+        apply_options_overrides(&base_dir(), &[("graphics".to_string(), "fast".to_string())])
+            .unwrap();
+
+        let written = std::fs::read_to_string(base_dir().join("options.txt")).unwrap();
+        assert_eq!(written, "graphics:fast\n");
+    }
+
+    #[test]
+    fn nothing_to_write_leaves_the_file_alone() {
+        let _guard = lock();
+        seed();
+
+        let applied = apply_options_overrides(&base_dir(), &[]).unwrap();
+
+        assert_eq!(applied, 0);
+        assert_eq!(
+            std::fs::read_to_string(base_dir().join("options.txt")).unwrap(),
+            "fov:0.5\n"
+        );
     }
 }
