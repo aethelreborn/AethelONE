@@ -1,3 +1,33 @@
+## 2.32.0 (2026-10-21)
+
+### Features
+
+- Added an ability to export your OneClient clusters, compatible with other launchers too
+- A saved server can now be given a name. The servers page grew a pencil button next to every row: it turns the name into a field you can type in, and saving it keeps the name for good - the row then shows the name with the address underneath it. A blank name takes the name away again, so a server goes back to showing its address.
+- Added syncing up dedicated clusters with shared directory data (settings, worlds, config etc.) by [rozwader](https://github.com/rozwader)
+
+- Clusters can import modpacks
+
+- Added importing instances from other launchers, such as: Modrinth App and Prism Launcher
+
+### Fixes
+
+- Added organizations showing up in mods pages in browser by [rozwader](https://github.com/rozwader)
+- Added warning when a user is trying to install a different version of already bundled mod
+- Added a "Deleted" tab in mods list, where deleted bundled mods are stored by [rozwader](https://github.com/rozwader)
+- Added changelog button for mods in the update modal by [rozwader](https://github.com/rozwader)
+- Disabled ability to search CurseForge on Orinthe clusters (CurseForge doesn't provide Orinthe compatible mods) by [rozwader](https://github.com/rozwader)
+- Fixed mods auto enabling (after being disabled) when added from declined bundles (eg. skyblock bundle) by [rozwader](https://github.com/rozwader)
+- Added option to choose from dedicated and shared dir while creating OneClient cluster instance by [rozwader](https://github.com/rozwader)
+- Added hidden packages filter turning on when user searches packages thru searchbar, by [rozwader](https://github.com/rozwader)
+- Added open link button for new OneClient version toasts by [rozwader](https://github.com/rozwader)
+- Added a button for opening logs from launcher by [rozwader](https://github.com/rozwader)
+- Added a dropdown for opengl/vulkan graphic backend in cluster with version 26.2 and above by [rozwader](https://github.com/rozwader)
+- Changed the order of settings in cluster settings by [rozwader](https://github.com/rozwader)
+- Fixed text wrapping up weirdly in the new instance creator by [rozwader](https://github.com/rozwader)
+
+- Added a cluster reset button, that resets cluster back to it's factory settings: mods, config, packages.
+
 ## 2.31.0 (2026-10-21)
 
 ### Features
