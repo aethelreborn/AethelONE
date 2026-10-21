@@ -195,7 +195,7 @@ struct ServerRow {
 /// Writes the name a server was given, a blank name takes the name away
 fn save_server_name(
     draft: State<String>,
-    editing: State<bool>,
+    mut editing: State<bool>,
     server_id: i64,
     dispatch: crate::Actions,
 ) -> impl FnMut() {
