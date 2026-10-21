@@ -21,6 +21,7 @@ use super::cluster_not_found;
 use super::package_manager::{
     PackageManager, bundle_categories, bundle_packages, stale_page_updates, use_content_meta,
 };
+use super::performance::PerformanceSet;
 use crate::hooks::use_cluster;
 
 #[derive(PartialEq)]
@@ -43,6 +44,15 @@ impl Component for ClusterMods {
         let Some(cluster) = use_cluster(self.cluster_id) else {
             return cluster_not_found();
         };
+
+        // The mods that raise the frame rate the most, with the ones the
+        // instance already carries left out
+        let performance =
+            crate::recommended::performance_picks_for(cluster.mc_loader, &cluster.mc_version);
+        let installed: Vec<String> = content_items
+            .iter()
+            .filter_map(|item| item.project_id.clone())
+            .collect();
 
         let all_categories = bundle_categories(&bundle_items);
         let mut items = bundle_packages(
@@ -67,6 +77,16 @@ impl Component for ClusterMods {
                 folder: oneclient_common::paths::cluster_mods_dir(&cluster.folder_name).ok(),
             })
             .child(ModHealthBanner { issues: health })
+            .maybe_child((!performance.is_empty()).then(|| {
+                PerformanceSet {
+                    cluster_id: self.cluster_id,
+                    picks: performance,
+                    installed: installed.clone(),
+                    mc_version: cluster.mc_version.clone(),
+                    loader: cluster.mc_loader,
+                }
+                .into_element()
+            }))
             .child(
                 PackageManager::new(
                     "Mods",

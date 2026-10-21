@@ -8,6 +8,7 @@ mod datapacks;
 mod folder_list;
 mod modpack_settings;
 mod mods;
+mod performance;
 mod process_logs;
 mod screenshots;
 mod shaders;
