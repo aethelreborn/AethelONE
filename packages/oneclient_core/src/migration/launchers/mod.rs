@@ -223,6 +223,10 @@ mod tests {
         let b = polyio::tempdir().await.unwrap();
         let root = a.dir_path();
 
+        // The path has to exist for the folder to be resolved, a "sub" that is
+        // not there cannot be walked back out of
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+
         assert!(same_folder(root, &root.join(".")));
         assert!(same_folder(root, &root.join("sub").join("..")));
         #[cfg(windows)]

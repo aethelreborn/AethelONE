@@ -1224,10 +1224,13 @@ mod tests {
             .iter()
             .map(|file| file["path"].as_str().unwrap().to_string())
             .collect();
-        assert_eq!(index_paths, vec!["mods/sodium.jar".to_string()]);
+        // A link without a local copy cannot be indexed - the index needs the
+        // hashes of the file itself - so it stays a download
+        assert!(index_paths.is_empty());
         let shared: ClusterShare = serde_json::from_value(read(SHARE_ENTRY)).unwrap();
-        assert_eq!(shared.downloads.len(), 1);
-        assert_eq!(shared.downloads[0].path, "mods/jei.jar");
+        assert_eq!(shared.downloads.len(), 2);
+        assert_eq!(shared.downloads[0].path, "mods/sodium.jar");
+        assert_eq!(shared.downloads[1].path, "mods/jei.jar");
     }
 
     #[test]
