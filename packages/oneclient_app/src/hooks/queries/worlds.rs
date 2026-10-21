@@ -327,6 +327,10 @@ pub async fn restore_world_snapshot(
     Ok(result?)
 }
 
+pub async fn invalidate_cluster_worlds() {
+    QueriesStorage::<ClusterWorldsQuery>::invalidate_all().await;
+}
+
 pub async fn delete_world_datapack(
     cluster_id: i64,
     world: String,

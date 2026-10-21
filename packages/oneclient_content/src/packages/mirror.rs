@@ -152,7 +152,10 @@ pub fn version_number_from_file_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
     let stem = base.strip_suffix(".jar").unwrap_or(base);
     let version = stem.split_once('+').map_or(stem, |(version, _)| version);
-    version.strip_prefix("polyplus-").unwrap_or(version).to_string()
+    version
+        .strip_prefix("polyplus-")
+        .unwrap_or(version)
+        .to_string()
 }
 
 /// Compares dotted version numbers, `None` when they cannot be compared
@@ -504,17 +507,26 @@ mod tests {
 
     #[test]
     fn the_version_number_comes_out_of_the_file_name() {
-        assert_eq!(version_number_from_file_name("polyplus-1.3.11+1.21.1.jar"), "1.3.11");
+        assert_eq!(
+            version_number_from_file_name("polyplus-1.3.11+1.21.1.jar"),
+            "1.3.11"
+        );
         assert_eq!(
             version_number_from_file_name("mods/polyplus-1.3.11+26.3.jar"),
             "1.3.11"
         );
-        assert_eq!(version_number_from_file_name("polyplus-1.3.11.jar"), "1.3.11");
+        assert_eq!(
+            version_number_from_file_name("polyplus-1.3.11.jar"),
+            "1.3.11"
+        );
     }
 
     #[test]
     fn versions_compare_by_their_numbers() {
-        assert_eq!(compare_versions("1.3.11", "1.3.10"), Some(Ordering::Greater));
+        assert_eq!(
+            compare_versions("1.3.11", "1.3.10"),
+            Some(Ordering::Greater)
+        );
         assert_eq!(compare_versions("1.3.10", "1.3.11"), Some(Ordering::Less));
         assert_eq!(compare_versions("1.3.11", "1.3.11"), Some(Ordering::Equal));
         assert_eq!(compare_versions("1.3.11", "1.3.11.1"), Some(Ordering::Less));
@@ -537,7 +549,10 @@ mod tests {
         assert_eq!(version.loaders, vec![GameLoader::Fabric]);
         let file = version.primary_file().expect("a primary file");
         assert_eq!(file.sha1, "aaa111");
-        assert_eq!(file.url, "https://example.test/polyplus-1.2.57%2B1.21.11.jar");
+        assert_eq!(
+            file.url,
+            "https://example.test/polyplus-1.2.57%2B1.21.11.jar"
+        );
         assert!(file.primary);
     }
 }

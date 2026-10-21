@@ -319,19 +319,23 @@ async fn mirror_latest_for(
 }
 
 /// The mirror build for a cluster, shaped like a provider release
-async fn mirror_version_for(
-    cluster_id: i64,
-    ctx: &ContentCtx,
-) -> ContentResult<VersionDetail> {
+async fn mirror_version_for(cluster_id: i64, ctx: &ContentCtx) -> ContentResult<VersionDetail> {
     let cluster = PackageStore::get_cluster(cluster_id, ctx).await?;
-    let manifest = crate::packages::mirror::load(ctx).await.ok_or_else(|| ContentError::InvalidData {
-        reason: "the PolyPlus mirror manifest is unreachable".to_string(),
-    })?;
-    let entry = manifest
-        .entry_for_mc(&cluster.mc_version)
-        .ok_or_else(|| ContentError::InvalidData {
-            reason: format!("the PolyPlus mirror has no build for {}", cluster.mc_version),
-        })?;
+    let manifest =
+        crate::packages::mirror::load(ctx)
+            .await
+            .ok_or_else(|| ContentError::InvalidData {
+                reason: "the PolyPlus mirror manifest is unreachable".to_string(),
+            })?;
+    let entry =
+        manifest
+            .entry_for_mc(&cluster.mc_version)
+            .ok_or_else(|| ContentError::InvalidData {
+                reason: format!(
+                    "the PolyPlus mirror has no build for {}",
+                    cluster.mc_version
+                ),
+            })?;
     let loader = GameLoader::from_repr(cluster.mc_loader as u8).unwrap_or(GameLoader::Fabric);
     Ok(crate::packages::mirror::version_from_entry(entry, loader))
 }

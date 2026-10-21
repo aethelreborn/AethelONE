@@ -9,7 +9,7 @@ use crate::cluster::Cluster;
 use crate::error::ClusterResult;
 use crate::zipwalk::zip_dir_recursive;
 
-const SAVES_DIR: &str = "saves";
+pub(crate) const SAVES_DIR: &str = "saves";
 const DATAPACKS_DIR: &str = "datapacks";
 const WORLD_BACKUPS_DIR: &str = "world_backups";
 pub const LEVEL_DAT: &str = "level.dat";

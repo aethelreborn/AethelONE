@@ -6,6 +6,7 @@ mod cluster_settings;
 mod configs;
 mod datapacks;
 mod folder_list;
+mod imported_modpacks;
 mod modpack_settings;
 mod mods;
 mod performance;

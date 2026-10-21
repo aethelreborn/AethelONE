@@ -463,8 +463,11 @@ mod tests {
         let _guard = lock();
         seed();
 
-        apply_options_overrides(&base_dir(), &[("cloudStatus".to_string(), "false".to_string())])
-            .unwrap();
+        apply_options_overrides(
+            &base_dir(),
+            &[("cloudStatus".to_string(), "false".to_string())],
+        )
+        .unwrap();
 
         let written = std::fs::read_to_string(base_dir().join("options.txt")).unwrap();
         assert!(written.contains("cloudStatus:false"), "{written}");

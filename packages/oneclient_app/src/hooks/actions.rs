@@ -3,10 +3,15 @@
 //! Always `spawn_forever` never `spawn` Freya's `spawn` cancels the task when
 //! the calling component unmounts this work is app-scoped not component-scoped
 
+mod external_import;
+pub use external_import::{AlternativePick, ExternalImportJob};
 mod modpacks;
 
+pub(crate) use modpacks::listed;
 pub use modpacks::modpack_job_running;
 mod release_migration;
+mod share;
+pub use share::exporting;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1064,7 +1069,13 @@ impl Actions {
     fn launch_cluster_with(&self, cluster_id: ClusterId, quick_play: Option<QuickPlay>) {
         if modpack_job_running(cluster_id) {
             self.notify("The modpack is still being set up")
-                .body("Wait for it to finish installing, then press Play again.")
+                .body("Wait for the modpack to finish, or close its dialog, then press Play again.")
+                .send();
+            return;
+        }
+        if oneclient_core::clusters::is_resetting(cluster_id) {
+            self.notify("This instance is being reset")
+                .body("Wait for the reset to finish, then press Play again.")
                 .send();
             return;
         }
@@ -1083,7 +1094,17 @@ impl Actions {
         let actions = self.clone();
         spawn_forever(async move {
             let started = Instant::now();
-            launch(&actions, cluster_id, quick_play).await;
+            match super::sync_actions::sync_launch_block(cluster_id).await {
+                Some(reason) => actions
+                    .notify("Wait for the sync to finish")
+                    .body(reason)
+                    .send(),
+                None if modpacks::modpack_job_in_shared_dir(cluster_id).await => actions
+                    .notify("A modpack is still being set up")
+                    .body("It is changing an instance that shares this game folder. Press Play again once it finishes.")
+                    .send(),
+                None => launch(&actions, cluster_id, quick_play).await,
+            }
 
             // An instant failure would hand the button back inside the same
             // click burst so hold it for the floor either way
@@ -2233,6 +2254,9 @@ async fn launch(actions: &Actions, cluster_id: ClusterId, quick_play: Option<Qui
     tokio::spawn(async move {
         if let Err(err) = oneclient_content::packages::refresh_bad_mods(&content).await {
             tracing::warn!(%err, "bad mods list refresh failed, keeping the last one");
+        }
+        if let Err(err) = oneclient_content::packages::refresh_bad_modpacks(&content).await {
+            tracing::warn!(%err, "bad modpacks list refresh failed, keeping the last one");
         }
     });
 

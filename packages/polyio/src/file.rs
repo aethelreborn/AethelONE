@@ -307,7 +307,8 @@ static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Sibling rather than temp dir `rename` across mount points fails with
 /// `EXDEV` and `/tmp` is often a separate tmpfs on Linux
-fn temp_sibling(path: &Path) -> PathBuf {
+#[must_use]
+pub fn temp_sibling(path: &Path) -> PathBuf {
     let n = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let stem = path
         .file_name()
@@ -858,7 +859,8 @@ mod tests {
             "{relative:?} escaped to an absolute path: {out:?}"
         );
         assert!(
-            !out.components().any(|c| c == std::path::Component::ParentDir),
+            !out.components()
+                .any(|c| c == std::path::Component::ParentDir),
             "{relative:?} escaped via a parent segment: {out:?}"
         );
     }
@@ -899,7 +901,9 @@ mod tests {
         );
         assert_eq!(
             sanitize_path("config/some pack/config.json"),
-            PathBuf::from("config").join("some pack").join("config.json")
+            PathBuf::from("config")
+                .join("some pack")
+                .join("config.json")
         );
     }
 

@@ -8,9 +8,10 @@ use oneclient_content::packages::health::HealthIssue;
 
 use crate::components::{Button, Icon, IconType, OverlayPopup};
 use crate::hooks::{
-    bundle_overrides_map, bundles_with_status_items, cluster_content_items, package_updates,
-    stale_hashes, use_bundle_overrides, use_bundles_with_status, use_cluster_content,
-    use_mod_health, use_mods_folder_sync, use_package_updates, use_shadowed_mods,
+    bundle_overrides_map, bundles_with_status_items, cluster_content_items, modpack_sources_map,
+    package_updates, stale_hashes, use_bundle_overrides, use_bundles_with_status,
+    use_cluster_content, use_mod_health, use_modpack_sources, use_mods_folder_sync,
+    use_package_updates, use_shadowed_mods,
 };
 use crate::layout::cluster_content;
 use crate::theme::colors;
@@ -35,6 +36,7 @@ impl Component for ClusterMods {
         let bundles = use_bundles_with_status(self.cluster_id);
         let overrides = use_bundle_overrides(self.cluster_id);
         let updates = use_package_updates(self.cluster_id);
+        let sources = use_modpack_sources(self.cluster_id);
         let shadowed = use_shadowed_mods(self.cluster_id);
         let health = use_mod_health(self.cluster_id);
         let bundle_items = bundles_with_status_items(&bundles);
@@ -63,7 +65,12 @@ impl Component for ClusterMods {
             &stale_hashes(&updates),
             ContentType::Mod,
         );
+        let sources = modpack_sources_map(&sources);
         for item in &mut items {
+            item.modpack = item
+                .hash
+                .as_ref()
+                .and_then(|hash| sources.get(hash).cloned());
             let Some(hash) = &item.hash else {
                 continue;
             };

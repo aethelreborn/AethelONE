@@ -21,6 +21,11 @@ pub struct VersionCard {
 }
 
 impl VersionCard {
+    pub fn menu(mut self, target: Option<ClusterMenuTarget>) -> Self {
+        self.menu = target;
+        self
+    }
+
     pub fn new(
         line: ReleaseLine,
         clusters: &[Cluster],
@@ -73,12 +78,14 @@ impl PartialEq for VersionCard {
             && self.caption == other.caption
             && self.count == other.count
             && self.selected == other.selected
+            && self.menu == other.menu
     }
 }
 
 impl Component for VersionCard {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
+        let menu_at = use_state(|| None::<(f32, f32)>);
 
         let a11y_id = use_a11y();
         let focus = use_focus(a11y_id);
@@ -117,8 +124,18 @@ impl Component for VersionCard {
             .a11y_focusable(true)
             .a11y_role(AccessibilityRole::Button)
             .on_press(move |e| on_press.call(e))
+            .maybe(self.menu.is_some(), |el| {
+                el.on_secondary_down(open_menu_at(menu_at))
+            })
             .on_pointer_enter(move |_| hovering.set(true))
             .on_pointer_leave(move |_| hovering.set(false))
+            .maybe_child(self.menu.clone().map(|target| {
+                ClusterContextMenu {
+                    target,
+                    position: menu_at,
+                }
+                .into_element()
+            }))
             .child(
                 rect()
                     .width(Size::fill())

@@ -10,7 +10,7 @@ use oneclient_core::settings::ViewLayout;
 use crate::components::{
     Button, CardLayout, ChevronToggle, ContextMenu, FilterMenu, FilterOption, Icon, IconType,
     LazySection, PackageEntry, PackageRow, ScrollArea, Segment, SegmentedControl, TextInput,
-    package_context_menu, use_shared_delete,
+    bundled_delete_action, package_context_menu, run_guarded, use_shared_delete,
 };
 use crate::hooks::{
     ClusterAction, Selection, use_cluster_mutation, use_dispatch, use_settings_snapshot,
@@ -126,7 +126,7 @@ impl HiddenFilter {
 
     const ALL: [HiddenFilter; 2] = [HiddenFilter::Hide, HiddenFilter::Show];
 
-    fn key(self) -> &'static str {
+    pub(super) fn key(self) -> &'static str {
         match self {
             HiddenFilter::Hide => "hide",
             HiddenFilter::Show => "show",
@@ -862,6 +862,8 @@ impl Component for ContentBox {
         let dispatch = use_dispatch();
         let cluster = use_cluster_mutation();
         let allow_bundled_removal = use_settings_snapshot().settings.allow_bundled_mod_removal;
+        let guard = use_essential_guard();
+        let warnings_query = use_disable_warnings();
         let mut menu = use_state(|| None::<(f32, f32, PackageEntry)>);
         let (on_delete, delete_dialog) = use_shared_delete(cluster_id, move |(_, hash)| {
             cluster.mutate(ClusterAction::RemoveArtifact { cluster_id, hash });
@@ -942,6 +944,27 @@ impl Component for ContentBox {
                 bulk.menu(x, y, item.package_id.clone())
             } else {
                 let key = item.package_id.clone();
+                let on_bundled = (content_type == ContentType::Mod).then(|| {
+                    let item = item.clone();
+                    let warnings = disable_warnings(&warnings_query);
+                    let handler: EventHandler<()> = (move |()| {
+                        let Some(action) = bundled_delete_action(&item, cluster_id) else {
+                            return;
+                        };
+                        let only = [&item];
+                        run_guarded(
+                            action,
+                            if item.deleted { &[] } else { &only[..] },
+                            item.name.clone(),
+                            EssentialGuardKind::Remove,
+                            warnings.clone(),
+                            cluster,
+                            guard,
+                        );
+                    })
+                    .into();
+                    handler
+                });
                 package_context_menu(
                     x,
                     y,
@@ -950,6 +973,7 @@ impl Component for ContentBox {
                     package_type,
                     allow_bundled_removal,
                     on_delete,
+                    on_bundled,
                     (move |()| selection.toggle(key.clone())).into(),
                 )
             };

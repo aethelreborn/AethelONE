@@ -120,7 +120,7 @@ pub fn settings_row(
     description: impl Into<String>,
     trailing: impl IntoElement,
 ) -> impl IntoElement {
-    settings_row_inner(icon, title, description, trailing, false, None)
+    settings_row_inner(icon, title, description, trailing, RowTone::Normal, None)
 }
 
 pub fn settings_row_disabled(
@@ -129,7 +129,17 @@ pub fn settings_row_disabled(
     description: impl Into<String>,
     trailing: impl IntoElement,
 ) -> impl IntoElement {
-    settings_row_inner(icon, title, description, trailing, true, None)
+    settings_row_inner(icon, title, description, trailing, RowTone::Disabled, None)
+}
+
+/// For destructive actions, tinted red like the other danger notices
+pub fn settings_row_danger(
+    icon: IconType,
+    title: &'static str,
+    description: impl Into<String>,
+    trailing: impl IntoElement,
+) -> impl IntoElement {
+    settings_row_inner(icon, title, description, trailing, RowTone::Danger, None)
 }
 
 /// Same as [`settings_row`] but carries the settings-search id so a search jump can
@@ -141,7 +151,14 @@ pub fn settings_row_focus(
     description: impl Into<String>,
     trailing: impl IntoElement,
 ) -> impl IntoElement {
-    settings_row_inner(icon, title, description, trailing, false, Some(id))
+    settings_row_inner(
+        icon,
+        title,
+        description,
+        trailing,
+        RowTone::Normal,
+        Some(id),
+    )
 }
 
 /// Disabled twin of [`settings_row_focus`]
@@ -152,7 +169,21 @@ pub fn settings_row_disabled_focus(
     description: impl Into<String>,
     trailing: impl IntoElement,
 ) -> impl IntoElement {
-    settings_row_inner(icon, title, description, trailing, true, Some(id))
+    settings_row_inner(
+        icon,
+        title,
+        description,
+        trailing,
+        RowTone::Disabled,
+        Some(id),
+    )
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum RowTone {
+    Normal,
+    Disabled,
+    Danger,
 }
 
 fn settings_row_inner(
@@ -160,14 +191,15 @@ fn settings_row_inner(
     title: &'static str,
     description: impl Into<String>,
     trailing: impl IntoElement,
-    disabled: bool,
+    tone: RowTone,
     focus: Option<&'static str>,
 ) -> impl IntoElement {
     let description = description.into();
+    let danger = tone == RowTone::Danger;
     let focused = focus.is_some_and(|id| pending_setting_focus() == Some(id));
 
     let mut row = rect()
-        .maybe(disabled, |el| el.opacity(0.4))
+        .maybe(tone == RowTone::Disabled, |el| el.opacity(0.4))
         .horizontal()
         .width(Size::fill())
         .content(Content::Flex)
@@ -175,8 +207,15 @@ fn settings_row_inner(
         .spacing(16.)
         .padding(Gaps::new_symmetric(12., 16.))
         .corner_radius(CornerRadius::new_all(12.))
-        .background(colors::page_elevated())
-        .child(Icon::new(icon))
+        .background(if danger {
+            colors::danger().with_a(26)
+        } else {
+            colors::page_elevated()
+        })
+        .maybe(danger, |el| {
+            el.border(border_all_color(1., colors::danger().with_a(128)))
+        })
+        .child(Icon::new(icon).maybe(danger, |icon| icon.color(colors::danger())))
         .child(
             rect()
                 .vertical()
