@@ -1811,3 +1811,35 @@ NEEDS A HUMAN:
    the one question ("what is eating the disk?") and the list is for the rest,
    so the picture may drop everything that does not fit and the numbers must
    still be there.
+
+## 2026-10-21 - options.txt belongs to the launcher, and the real cause of a bad frame rate
+   The other session (Laptop, working on the PolyPlus mod in AethelOnePLUS) and
+   this one agree on the rule that ends the double write: **options.txt
+   belongs to the launcher**. The Performance Mode writes the video settings
+   into the game's own options file before the launch and never through the
+   running game, and from PolyPlus 1.3.11 the mod's low-end mode and its frame
+   rate cap live in memory only - the mod stopped calling options.save() so
+   it can no longer write the launcher's values back to disk. The mod side of
+   this is in AethelOnePLUS/AI_HANDOFF/AUDIT.txt, the launcher side stays
+   here.
+
+   Polydium was researched for the launcher's performance set and is **not**
+   going in it: PolyPlus bundles it inside its jar, Modrinth does not carry
+   it (the search returns nothing, the project answers 404) and CurseForge
+   only has the standalone build, which is not the patched one. The set keeps
+   Sodium, Lithium, ImmediatelyFast, FerriteCore and Entity Culling; the
+   patched PolyPlus jar from the mirror already carries Polydium, and the
+   launcher now updates PolyPlus from that mirror.
+
+   The mod's performance report names the cause a launcher cannot see: a
+   renderer that draws on the processor (llvmpipe, lavapipe, SwiftShader,
+   the Microsoft Basic Render Driver), an uncapped frame rate and the Vulkan
+   backend - Polydium switches the game to Vulkan by itself when it sees a
+   discrete card, and a broken Vulkan driver is a two-frames-per-second
+   machine. On a small laptop with no real driver that is worth more than
+   every setting in this file, and no launcher setting can fix it.
+
+   LESSON: when two writers own one file, the fix is not to make the second
+   one careful - it is to name the owner. And a "performance" complaint is
+   often not a setting at all: the machine may be drawing the game on the
+   processor, and no amount of tuning moves that.
