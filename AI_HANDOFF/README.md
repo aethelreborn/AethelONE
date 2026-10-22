@@ -193,30 +193,39 @@ component (`view/app/**`) → route/nav/palette wiring if it is a page.
 
 ## 7. Where everything shipped (summary)
 
-Iterations 1–20 are complete: **2.18.0 → 2.34.0**. 2.30.0 shipped
+Iterations 1–21 are complete: **2.18.0 → 2.35.0**. 2.30.0 shipped
 Performance Mode (the launcher now tunes the JVM, the heap and the game's own
 video settings instead of only promising to, commit `e7ee5d4d`), 2.31.0
 shipped the performance set and the per-instance performance mode, 2.32.0
 carried the upstream merge and the named saved servers, 2.33.0 says when the
-game asks for more memory than the machine can give and 2.34.0 draws the
-storage page as a picture. Full table with commits, versions, test counts
-and lessons: `ITERATIONS.md`. Audit trail with per-wave lessons: `AUDIT.txt`.
+game asks for more memory than the machine can give, 2.34.0 draws the storage
+page as a picture and 2.35.0 says what the launcher changed and when the game
+is being drawn by the processor. Full table with commits, versions, test
+counts and lessons: `ITERATIONS.md`. Audit trail with per-wave lessons:
+`AUDIT.txt`.
 
 ## 8. Exact resume point
 
 - Local `main`: the upstream merge (`863679fc`) plus the fixes that made it
-  compile and the two features after it. Run `git pull origin main` to be
-  current.
+  compile and the features after it. Run `git pull origin main` to be current.
 - PolyPlus: untouched, healthy, `0175d8f`, polydium pinned `1.1.2`.
 - **The upstream sync works again**: the merge resolved the conflicts that
   stopped it for days.
-- **Next iteration = 21.** Candidate backlog (in rough priority order):
-  1. Pending bundle/package updates preview ("what will change") before launch sync.
-  2. Mods page: grouping/tabs polish (Updates-first view).
-  3. Session timeline follow-ups if users want zoom/range control.
-  4. More performance work: the performance mode could also pick the
+- **The PolyPlus session (Laptop) owns the mod repo.** The options.txt rule
+  is agreed and written down on both sides: the launcher owns the file and
+  writes the video settings into it before the launch, the mod keeps its
+  low-end mode and frame cap in memory. The mod repo's own upstream sync
+  needs a port, not a rebase (the wardrobe package was rebuilt upstream) -
+  that is theirs, not the launcher's.
+- **Next iteration = 22.** Candidate backlog (in rough priority order):
+  1. Mods page: grouping/tabs polish (Updates-first view).
+  2. Session timeline follow-ups if users want zoom/range control.
+  3. More performance work: the performance mode could also pick the
      resolution, and the perf set could learn which mods the instance
      already has in a bundle.
+  4. The launcher's own Windows GPU detection is a stub (two preferences) -
+     a real enumeration would let the launcher say "your game is on a
+     software renderer" without waiting for a log.
   Research fresh candidates too — the loop allows any scope.
 - Also polish candidates: server rows drag-to-reorder; groups on Home;
   relative-time refresh on servers page; heatmap tooltip improvements.

@@ -25,7 +25,8 @@ are separate `chore: release X.Y.Z` commits — `git log` shows both).
 | 17 | Saved servers can be given a name | 2.32.0 | `3adb97a8` | draft, rebuild pending |
 | 18 | The upstream merge (42 upstream commits, the sync stops failing) | 2.32.0 | `863679fc` | 18 assets |
 | 19 | The launcher says when the game asks for more memory than the machine has | 2.33.0 | `6e3c5b28` | 18 assets |
-| 20 | The storage page draws what uses the space as a picture | 2.34.0 | `65a4246c` | draft, build running |
+| 20 | The storage page draws what uses the space as a picture | 2.34.0 | `65a4246c` | 18 assets |
+| 21 | The bundle sync says what it changed, and the renderer is read out of the log | 2.35.0 | `3bcc8adc` / `0667d587` | 18 assets |
 
 Latest release commits at handoff: `1ba6b296` (2.28.0), `cae690bf` (2.27.0),
 `59b19f19` (2.26.0), `ab300828` (2.25.0).
@@ -94,6 +95,10 @@ Latest release commits at handoff: `1ba6b296` (2.28.0), `cae690bf` (2.27.0),
 20. **The storage treemap** (`view/app/settings/storage.rs`): the categories and
     the clusters are drawn as blocks whose widths are their share of the
     whole, the bigger the block the stronger the colour.
+21. **The launcher says what it did** (`hooks/actions.rs`): a bundle sync names
+    every file it updated, added or removed, and the launch reads the renderer
+    out of the log the last launch left (`core/src/game/renderer.rs`) and says
+    when the game is being drawn by the processor.
 
 ## Confirmed-covered gaps (do NOT build these — they already exist)
 
