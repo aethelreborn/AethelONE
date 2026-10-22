@@ -12,9 +12,7 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use serde::Deserialize;
 
-use oneclient_common::constants::{
-    ONECONFIG_MODRINTH_PROJECT_ID, POLYPLUS_MIRROR_MANIFEST_URL, POLYPLUS_MODRINTH_PROJECT_ID,
-};
+use oneclient_common::constants::{POLYPLUS_MIRROR_MANIFEST_URL, POLYPLUS_MODRINTH_PROJECT_ID};
 use oneclient_common::domain::{GameLoader, ProviderId};
 use oneclient_common::paths;
 use oneclient_net::{EtagPolicy, fetch_cached};
@@ -154,14 +152,16 @@ pub fn version_is_older(left: &str, right: &str) -> bool {
     let (Some(left), Some(right)) = (parse(left), parse(right)) else {
         return false;
     };
-    for (l, r) in left.iter().zip(right.iter()) {
+    for (index, r) in right.iter().enumerate() {
+        let l = left.get(index).copied().unwrap_or(0);
         match l.cmp(r) {
             Ordering::Equal => {}
             Ordering::Less => return true,
             Ordering::Greater => return false,
         }
     }
-    left.len() < right.len()
+    // the longer version has parts the shorter one does not, so it is the newer one
+    left.len() > right.len()
 }
 
 /// The version id a mirror build is recorded under
