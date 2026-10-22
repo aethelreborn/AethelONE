@@ -13,6 +13,7 @@ use crate::ClusterStage;
 use crate::LauncherResult;
 use crate::clusters::Cluster;
 use crate::game::crash_triage::{self, CrashCandidate};
+use crate::game::renderer::Renderer;
 use crate::game::session::{self, SessionRecorder};
 use crate::game::tail::spawn_log_tail;
 use crate::game::{DirBusy, GameError};
@@ -463,6 +464,19 @@ async fn start(
             .send();
     }
 
+    // A machine that draws the game on the processor cannot be made fast by
+    // any setting, and the only place the launcher can see it is the log the
+    // last launch left
+    if SOFTWARE_RENDERER_HINT.set(()).is_ok()
+        && let Some(renderer) = last_renderer(&cwd).await
+        && renderer.software
+    {
+        events
+            .notify("The game is drawn by the processor")
+            .body(renderer.software_body())
+            .send();
+    }
+
     if mode != oneclient_common::performance::PerformanceMode::Off {
         tracing::info!(
             cluster_id,
@@ -731,6 +745,17 @@ async fn start(
 /// Whether the launcher has already said the game may be asking for more
 /// memory than the machine can give
 static LOW_MEMORY_HINT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+/// Whether the launcher has already said the game is drawn by the processor
+static SOFTWARE_RENDERER_HINT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+/// The renderer the last launch used, read from the log it left behind
+async fn last_renderer(game_dir: &Path) -> Option<Renderer> {
+    let log = game_dir.join("logs").join("latest.log");
+    let content = polyio::read_to_string(&log).await.ok()?;
+
+    crate::game::renderer::renderer_from_log(&content)
+}
 
 /// Whether the instance carries mods
 ///

@@ -9,6 +9,7 @@ mod log_replay;
 pub(crate) mod natives;
 mod process;
 mod reattach;
+mod renderer;
 mod session;
 mod shared_dir;
 mod tail;
@@ -42,6 +43,7 @@ pub use process::{
     process_start_time,
 };
 pub use reattach::recover_sessions;
+pub use renderer::{Renderer, renderer_from_log};
 pub(crate) use shared_dir::lock_mods_sync;
 pub use shared_dir::{
     DuplicateMods, dematerialize_content, import_manual_content, link_cluster_logs,
