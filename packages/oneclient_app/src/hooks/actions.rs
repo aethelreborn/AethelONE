@@ -1747,6 +1747,42 @@ impl Actions {
             return;
         }
 
+        // The launcher changed the instance's files under the user, so it says
+        // what it changed instead of letting the mods appear from nowhere
+        let mut changed: Vec<String> = Vec::new();
+        for update in &result.updates_applied {
+            changed.push(format!(
+                "{} updated",
+                bundle_file_name(&update.new_file.path)
+            ));
+        }
+        for addition in &result.additions_applied {
+            changed.push(format!(
+                "{} added",
+                bundle_file_name(&addition.new_file.path)
+            ));
+        }
+        for removal in &result.removals_applied {
+            let name = removal
+                .display_name
+                .clone()
+                .or_else(|| removal.project_id.clone())
+                .unwrap_or_else(|| "a file".to_string());
+            changed.push(format!("{name} removed"));
+        }
+
+        if !changed.is_empty() {
+            let shown = changed.len().min(6);
+            let mut body = changed[..shown].join("\n");
+            if changed.len() > shown {
+                body.push_str(&format!("\nand {} more", changed.len() - shown));
+            }
+            self.notify("Bundle content updated")
+                .body(body)
+                .toast_only()
+                .send();
+        }
+
         super::invalidate_cluster_queries().await;
     }
 
@@ -2205,6 +2241,12 @@ impl Actions {
             super::invalidate_cluster_queries().await;
         });
     }
+}
+
+/// The name of a file inside a bundle, the path of a mod is long and the
+/// name is what the user knows it by
+fn bundle_file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
 }
 
 fn group_by_cluster(mods: &[(ClusterId, OptionalModRef)]) -> Vec<(ClusterId, Vec<String>)> {
