@@ -1877,3 +1877,36 @@ NEEDS A HUMAN:
    for themselves. A mod can report the renderer while the game runs, but the
    person who needs to know is the one about to press play - and the file
    that knows is the log the last launch left behind.
+
+## 2026-10-22 - The wardrobe port does not touch the launcher's contract
+   The PolyPlus session (Laptop) ported the mod onto Polyfrost's new
+   wardrobe (the cosmetics screen became the wardrobe, with outfits, skins,
+   variant swatches, a preview, the store and a keybind), and PolyPlus 1.3.12
+   is on the rolling release, so the launcher picks it up through the mirror as
+   usual.
+
+   The launcher had to check one thing: the local cosmetics proxy answers
+   `GET /cosmetics/player` and `PUT /cosmetics/player` and serves the locker
+   the mod reads, and if the port had moved those paths or changed the
+   response, every cosmetic in the fork would quietly have stopped being
+   unlocked. Checked against the ported upstream (Polyfrost/PolyPlus): the
+   paths are the same, the player's response still carries exactly the four
+   fields the proxy writes (`cosmetics`, `emotes`, `equipped`,
+   `particle_color`), and the catalog is still `{"cosmetics": [...]}` with
+   groups of `type` and `variants`, which is what the proxy splits. The
+   store's new routes (`/cosmetics/search`, `/cosmetics/view/{id}`) are
+   forwarded like everything else. So nothing on the launcher side had to
+   change, and the fork's "All Cosmetics Unlocked" keeps working.
+
+   The launcher never names the cosmetics screen - the setting says "All
+   Cosmetics Unlocked" and describes what it does - so the rename to
+   wardrobe needs no copy either.
+
+   Also: the session timeline can be read over a range (the last 7, 30 or 90
+   days, or all of it) instead of always showing the last eighty finished
+   sessions.
+
+   LESSON: a proxy is a contract, and a rewrite on the other side of it is
+   exactly when the contract has to be checked rather than assumed. Ten
+   minutes reading the other repo's data classes saved a feature that would
+   have failed silently.
