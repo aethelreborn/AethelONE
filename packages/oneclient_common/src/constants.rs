@@ -20,6 +20,8 @@ pub const PLUS_BACKEND_URL: &str = "https://plus.polyfrost.org";
 
 /// Modrinth project id of PolyPlus (shown as "PolyPlus+").
 pub const POLYPLUS_MODRINTH_PROJECT_ID: &str = "Iw9mZi4a";
+/// OneConfig, the config library PolyPlus and the other Polyfrost mods share
+pub const ONECONFIG_MODRINTH_PROJECT_ID: &str = "AibBIVmj";
 /// Rolling manifest of AethelOnePLUS-built PolyPlus jars (cracked-uuid badge
 /// patch) published by the `build.yml` release job. Downloads and bundle
 /// update checks consult it and fall back to the official Modrinth file

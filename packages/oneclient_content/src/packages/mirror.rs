@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use serde::Deserialize;
 
-use oneclient_common::constants::{POLYPLUS_MIRROR_MANIFEST_URL, POLYPLUS_MODRINTH_PROJECT_ID};
+use oneclient_common::constants::{
+    ONECONFIG_MODRINTH_PROJECT_ID, POLYPLUS_MIRROR_MANIFEST_URL, POLYPLUS_MODRINTH_PROJECT_ID,
+};
 use oneclient_common::domain::{GameLoader, ProviderId};
 use oneclient_common::paths;
 use oneclient_net::{EtagPolicy, fetch_cached};
@@ -36,6 +38,10 @@ pub struct MirrorEntry {
     pub sha1: String,
     #[serde(default)]
     pub size: u64,
+    /// The OneConfig version the build needs, so an instance that cannot run it
+    /// is left alone instead of losing the mod
+    #[serde(default)]
+    pub oneconfig: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -132,6 +138,30 @@ pub fn rewrite_with(manifest: &MirrorManifest, file: &VersionFile) -> Option<Ver
         primary: file.primary,
         fingerprint: file.fingerprint.clone(),
     })
+}
+
+/// True when `left` is an older version than `right`, both dotted numbers
+#[must_use]
+pub fn version_is_older(left: &str, right: &str) -> bool {
+    let parse = |raw: &str| -> Option<Vec<u64>> {
+        let head = raw.split(['-', '+']).next()?;
+        let parts: Vec<u64> = head
+            .split('.')
+            .map(|part| part.parse::<u64>().ok())
+            .collect::<Option<Vec<u64>>>()?;
+        (!parts.is_empty()).then_some(parts)
+    };
+    let (Some(left), Some(right)) = (parse(left), parse(right)) else {
+        return false;
+    };
+    for (l, r) in left.iter().zip(right.iter()) {
+        match l.cmp(r) {
+            Ordering::Equal => {}
+            Ordering::Less => return true,
+            Ordering::Greater => return false,
+        }
+    }
+    left.len() < right.len()
 }
 
 /// The version id a mirror build is recorded under
@@ -533,6 +563,40 @@ mod tests {
         assert_eq!(compare_versions("1.3", "1.3.0"), Some(Ordering::Less));
         assert_eq!(compare_versions("", "1.3.11"), None);
         assert_eq!(compare_versions("nightly", "1.3.11"), None);
+    }
+
+    #[test]
+    fn versions_are_compared_by_their_numbers() {
+        assert!(version_is_older("1.4.4", "1.5.0"));
+        assert!(version_is_older("1.4.4", "1.5"));
+        assert!(!version_is_older("1.5.0", "1.4.4"));
+        assert!(!version_is_older("1.5.0", "1.5.0"));
+        assert!(!version_is_older("1.5", "1.5.0"));
+        // an unparsable version is not a reason to hold an update back
+        assert!(!version_is_older("", "1.5.0"));
+        assert!(!version_is_older("nightly", "1.5.0"));
+    }
+
+    #[test]
+    fn a_mirror_entry_carries_the_oneconfig_it_needs() {
+        let manifest: MirrorManifest = serde_json::from_str(
+            r#"{
+                "versions": [
+                    {
+                        "mc_version": "1.21.1",
+                        "file_name": "polyplus-1.3.12+1.21.1.jar",
+                        "url": "https://example.test/polyplus-1.3.12%2B1.21.1.jar",
+                        "sha1": "ccc333",
+                        "size": 44,
+                        "oneconfig": "1.5.0"
+                    }
+                ]
+            }"#,
+        )
+        .expect("test manifest parses");
+
+        let entry = manifest.entry_for_mc("1.21.1").expect("entry exists");
+        assert_eq!(entry.oneconfig.as_deref(), Some("1.5.0"));
     }
 
     #[test]

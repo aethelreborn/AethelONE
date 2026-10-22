@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 
-use oneclient_common::constants::POLYPLUS_MODRINTH_PROJECT_ID;
+use oneclient_common::constants::{ONECONFIG_MODRINTH_PROJECT_ID, POLYPLUS_MODRINTH_PROJECT_ID};
 use oneclient_common::domain::{ContentType, GameLoader, ProviderId};
 use oneclient_db::dao::artifact as artifact_dao;
 use oneclient_db::dao::browser_package_update as update_dao;
@@ -312,10 +312,32 @@ async fn mirror_latest_for(
         );
         return Ok(None);
     }
+    // the build needs a newer OneConfig than the providers carry: the instance
+    // would skip the mod entirely, so the update waits for it
+    if let Some(required) = entry.oneconfig.as_deref()
+        && let Some(newest) = newest_oneconfig(ctx, cluster).await
+        && crate::packages::mirror::version_is_older(&newest, required)
+    {
+        tracing::debug!(
+            required = %required,
+            newest = %newest,
+            "the mirror build needs a newer OneConfig than the providers carry"
+        );
+        return Ok(None);
+    }
     Ok(Some((
         crate::packages::mirror::version_id_for(entry),
         mirror_version,
     )))
+}
+
+/// The newest OneConfig the providers carry for this instance
+async fn newest_oneconfig(ctx: &ContentCtx, cluster: &ClusterRow) -> Option<String> {
+    let provider = ctx.providers.get(ProviderId::Modrinth).ok()?;
+    let picked = pick_version(provider, ONECONFIG_MODRINTH_PROJECT_ID, cluster, ctx)
+        .await
+        .ok()??;
+    Some(picked.version_number)
 }
 
 /// The mirror build for a cluster, shaped like a provider release
