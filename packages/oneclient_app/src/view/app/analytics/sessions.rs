@@ -3,11 +3,15 @@ use freya::prelude::*;
 
 use oneclient_core::game::{PlaySession, group_sessions_by_day};
 
+use crate::components::Dropdown;
 use crate::hooks::{try_recent_sessions, use_recent_sessions};
 use crate::theme::colors;
 use crate::utils::format_duration;
 
 const SESSION_LIMIT: i64 = 80;
+
+/// The ranges the timeline can show, in days; zero means every session
+const RANGES: [(i64, &str); 4] = [(7, "7 days"), (30, "30 days"), (90, "90 days"), (0, "All")];
 
 #[derive(PartialEq)]
 pub struct SessionsTimeline {
@@ -24,12 +28,44 @@ impl Component for SessionsTimeline {
     fn render(&self) -> impl IntoElement {
         let query = use_recent_sessions(self.cluster_id, SESSION_LIMIT);
         let sessions = try_recent_sessions(&query);
+        let mut range = use_state(|| 0i64);
+        let days = *range.read();
         let Some(sessions) = sessions.filter(|list| !list.is_empty()) else {
             return rect().into_element();
         };
 
         let today = Utc::now().date_naive();
-        let groups = group_sessions_by_day(&sessions);
+        let groups: Vec<(String, Vec<&PlaySession>)> = group_sessions_by_day(&sessions)
+            .into_iter()
+            .filter(|(day, _)| within_range(day, days, today))
+            .collect();
+
+        if groups.is_empty() {
+            return rect().into_element();
+        }
+
+        let picker = {
+            let mut range = range;
+            let current = RANGES
+                .iter()
+                .find(|(span, _)| *span == days)
+                .map(|(_, label)| (*label).to_string())
+                .unwrap_or_else(|| "All".to_string());
+            let labels: Vec<String> = RANGES
+                .iter()
+                .map(|(_, label)| (*label).to_string())
+                .collect();
+
+            Dropdown::new(current, labels)
+                .width(Size::px(104.))
+                .height(Size::px(28.))
+                .on_select(move |idx: usize| {
+                    if let Some((span, _)) = RANGES.get(idx) {
+                        range.set(*span);
+                    }
+                })
+                .into_element()
+        };
 
         let chart = rect()
             .vertical()
@@ -80,14 +116,28 @@ impl Component for SessionsTimeline {
 
         super::chart_card(
             "Recent sessions",
-            format!(
-                "Your last {} finished sessions, newest first",
-                SESSION_LIMIT
-            ),
-            None,
+            if days > 0 {
+                format!("The last {days} days of your last {SESSION_LIMIT} finished sessions")
+            } else {
+                format!("Your last {SESSION_LIMIT} finished sessions, newest first")
+            },
+            Some(picker),
             chart,
         )
     }
+}
+
+/// Whether a day belongs to the range the picker shows
+fn within_range(day: &str, days: i64, today: NaiveDate) -> bool {
+    if days <= 0 {
+        return true;
+    }
+
+    let Ok(date) = NaiveDate::parse_from_str(day, "%Y-%m-%d") else {
+        return true;
+    };
+
+    (today - date).num_days() < days
 }
 
 fn session_row(session: &PlaySession, day_max: i64) -> Element {
@@ -169,7 +219,7 @@ pub(super) fn day_label(day: &str, today: NaiveDate) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::day_label;
+    use super::{day_label, within_range};
 
     #[test]
     fn day_labels_speak_in_today_and_yesterday() {
@@ -178,5 +228,38 @@ mod tests {
         assert_eq!(day_label("2026-10-17", today), "Yesterday");
         assert_eq!(day_label("2026-10-11", today), "Sun, Oct 11");
         assert_eq!(day_label("not-a-date", today), "not-a-date");
+    }
+
+    #[test]
+    fn a_range_keeps_the_days_it_covers() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 18).unwrap();
+
+        assert!(
+            within_range("2026-10-18", 7, today),
+            "today is in every range"
+        );
+        assert!(
+            within_range("2026-10-12", 7, today),
+            "six days back is in a week"
+        );
+        assert!(!within_range("2026-10-11", 7, today), "a week back is not");
+        assert!(
+            within_range("2026-10-11", 30, today),
+            "but it is in a month"
+        );
+        assert!(
+            within_range("2026-01-01", 0, today),
+            "every range keeps all of it"
+        );
+    }
+
+    #[test]
+    fn a_day_the_picker_cannot_read_stays_in_the_range() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 18).unwrap();
+
+        assert!(
+            within_range("not-a-date", 7, today),
+            "a day that cannot be read is not a day outside the range"
+        );
     }
 }
