@@ -1843,3 +1843,37 @@ NEEDS A HUMAN:
    one careful - it is to name the owner. And a "performance" complaint is
    often not a setting at all: the machine may be drawing the game on the
    processor, and no amount of tuning moves that.
+
+## 2026-10-21 - The launcher says what it changed, and when the game is drawn by the processor
+   Two small things that belong to the same idea - the launcher should say
+   what it did to the machine, because the user cannot see it otherwise.
+
+   The bundle sync used to update, add and remove files under the user
+   between one launch and the next, and a mod that was suddenly gone had no
+   answer. The launch now carries a toast that names every file that was
+   updated, added or removed, and it is capped at six names so a big sync
+   does not bury the screen.
+
+   The second one is the one the PolyPlus session (Laptop) pointed at: a
+   machine with no working graphics driver draws the whole game on the
+   processor, and then no setting in the launcher can make it fast - the
+   frames are made by the same processor that runs the game. The mod can see
+   this while the game runs, the launcher can only read the log the last
+   launch left, and that is the one chance to say it before the next launch.
+   The new `core/src/game/renderer.rs` reads the renderer out of
+   `logs/latest.log` (both the old `GL_RENDERER: name` line and the newer
+   `OpenGL renderer: name` one), knows the software renderers by name
+   (llvmpipe, lavapipe, softpipe, SwiftShader, the Microsoft Basic Render
+   Driver, GDI Generic, Mesa/X.org) and the launch carries a toast that names
+   the renderer and says the machine needs a working graphics driver. Seven
+   unit tests cover the log formats and the software names.
+
+   The rule the two repos agreed on and that this session keeps: options.txt
+   belongs to the launcher. The Performance Mode writes the video settings
+   into that file before the launch and never through the running game, and
+   the mod keeps its own low-end mode and frame cap in memory.
+
+   LESSON: the thing that is worth a toast is the thing the user cannot see
+   for themselves. A mod can report the renderer while the game runs, but the
+   person who needs to know is the one about to press play - and the file
+   that knows is the log the last launch left behind.
