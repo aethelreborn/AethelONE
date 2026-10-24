@@ -1,5 +1,6 @@
 mod analytics;
 mod clusters;
+mod cosmetics;
 mod debug;
 mod home;
 mod servers;
@@ -71,6 +72,7 @@ pub fn launch_syncing(launcher: &LauncherInit, uses_bundles: bool) -> bool {
 pub(crate) use analytics::{analytics_body, analytics_placeholder};
 pub use clusters::Clusters;
 pub(crate) use clusters::DeleteInstanceModal;
+pub use cosmetics::Cosmetics;
 pub use debug::Debug;
 pub use home::Home;
 pub use servers::Servers;

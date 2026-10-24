@@ -268,6 +268,50 @@ fn loadout_mut<'a>(
         .expect("a loadout was just stored for the account")
 }
 
+/// Equipment snapshot for `account`, keyed by cosmetic slot.
+pub fn equipped_for(account: &str) -> BTreeMap<String, Value> {
+    STATE.loadout(&account.to_owned()).equipped
+}
+
+/// Equips `variant` in every slot the cosmetic allows. Marks the loadout as
+/// seeded so a later in-game login does not overwrite the launcher's choice
+/// with the official locker.
+pub fn equip_cosmetic(account: &str, slots: &[String], variant: i64) {
+    STATE.with_loadout(&account.to_owned(), |loadout| {
+        apply_equip(loadout, slots, variant);
+        loadout.seeded = true;
+    });
+    STATE.persist();
+}
+
+pub fn unequip_cosmetics(account: &str, slots: &[String]) {
+    STATE.with_loadout(&account.to_owned(), |loadout| {
+        apply_unequip(loadout, slots);
+        loadout.seeded = true;
+    });
+    STATE.persist();
+}
+
+pub fn clear_cosmetics(account: &str) {
+    STATE.with_loadout(&account.to_owned(), |loadout| {
+        loadout.equipped.clear();
+        loadout.seeded = true;
+    });
+    STATE.persist();
+}
+
+fn apply_equip(loadout: &mut Loadout, slots: &[String], variant: i64) {
+    for slot in slots {
+        loadout.equipped.insert(slot.clone(), json!(variant));
+    }
+}
+
+fn apply_unequip(loadout: &mut Loadout, slots: &[String]) {
+    for slot in slots {
+        loadout.equipped.remove(slot);
+    }
+}
+
 fn state_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|base| base.home_dir().join(".aethelone"))
 }
@@ -414,6 +458,12 @@ static BUNDLED_CATALOG: &[u8] = include_bytes!("../assets/cosmetics_catalog.json
 
 async fn catalog() -> Result<Value, String> {
     catalog_from(&CLIENT, UPSTREAM, &catalog_file(), Some(BUNDLED_CATALOG)).await
+}
+
+/// Catalog snapshot for the launcher's wardrobe screen, using the same cache
+/// tiers as the in-game locker.
+pub async fn catalog_snapshot() -> Result<Value, String> {
+    catalog().await
 }
 
 /// Answers from the first tier that can: the in-memory cache, the on-disk
@@ -1639,6 +1689,37 @@ mod tests {
         let bob = restored.loadout(&bob);
         assert_eq!(bob.equipped["hat"], json!(22));
         assert!(!bob.seeded);
+    }
+
+    #[test]
+    fn equip_fills_every_allowed_slot() {
+        let mut loadout = Loadout::default();
+        apply_equip(
+            &mut loadout,
+            &["left_hand".to_owned(), "right_hand".to_owned()],
+            42,
+        );
+        assert_eq!(loadout.equipped["left_hand"], json!(42));
+        assert_eq!(loadout.equipped["right_hand"], json!(42));
+    }
+
+    #[test]
+    fn equipping_replaces_the_previous_variant_in_a_slot() {
+        let mut loadout = Loadout::default();
+        apply_equip(&mut loadout, &["cape".to_owned()], 1);
+        apply_equip(&mut loadout, &["cape".to_owned()], 2);
+        assert_eq!(loadout.equipped["cape"], json!(2));
+        assert_eq!(loadout.equipped.len(), 1);
+    }
+
+    #[test]
+    fn unequip_removes_only_the_named_slots() {
+        let mut loadout = Loadout::default();
+        apply_equip(&mut loadout, &["cape".to_owned()], 1);
+        apply_equip(&mut loadout, &["hat".to_owned()], 2);
+        apply_unequip(&mut loadout, &["cape".to_owned()]);
+        assert!(!loadout.equipped.contains_key("cape"));
+        assert_eq!(loadout.equipped["hat"], json!(2));
     }
 
     #[test]

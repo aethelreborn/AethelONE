@@ -55,6 +55,12 @@ fn static_commands() -> Vec<Command> {
             Route::AccountSkins {},
         ),
         Command::new(
+            "Cosmetics",
+            "wardrobe and equipped items",
+            IconType::PaintPour,
+            Route::Cosmetics {},
+        ),
+        Command::new(
             "Statistics",
             "playtime stats",
             IconType::BarChartSquare02,

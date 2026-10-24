@@ -158,8 +158,8 @@ fn navbar_center(is_small: bool) -> impl IntoElement {
             nav_label: "Skins",
         })
         .child(NavLink {
-            active: false,
-            target: NavTarget::External("https://store.polyfrost.org"),
+            active: route == Route::Cosmetics {},
+            target: NavTarget::Route(Route::Cosmetics {}),
             nav_label: "Cosmetics",
         })
 }

@@ -10,7 +10,7 @@ use crate::layout::SettingsShell;
 use crate::view::{
     NotFound, Relocating, Startup,
     app::{
-        AccountSkins, Clusters, Debug, Home, Servers, Stats,
+        AccountSkins, Clusters, Cosmetics, Debug, Home, Servers, Stats,
         browser::{Browser, BrowserPackage},
         cluster::{
             ClusterConfigs, ClusterDataPacks, ClusterLogs, ClusterMods, ClusterOverview,
@@ -102,6 +102,8 @@ pub enum Route {
             },
             #[route("/app/account/skins")]
             AccountSkins {},
+            #[route("/app/cosmetics")]
+            Cosmetics {},
             #[route("/app/stats")]
             Stats {},
             #[route("/app/servers")]
@@ -169,6 +171,7 @@ impl Route {
             Route::Browser { .. } => "Browser".to_string(),
             Route::BrowserPackage { .. } => "Browser".to_string(),
             Route::AccountSkins { .. } => "Skins".to_string(),
+            Route::Cosmetics { .. } => "Cosmetics".to_string(),
             Route::Stats { .. } => "Statistics".to_string(),
             Route::Servers { .. } => "Servers".to_string(),
             Route::Debug { .. } => "Debug".to_string(),
