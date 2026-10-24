@@ -88,8 +88,8 @@ impl Component for Cosmetics {
         let account_uuid = account.as_ref().map(|account| account.id.to_string());
         let has_account = account_key.is_some();
 
-        let catalog = use_state(|| None::<Result<Vec<WardrobeItem>, String>>);
-        let equipped = use_state(BTreeMap::<String, Value>::new);
+        let mut catalog = use_state(|| None::<Result<Vec<WardrobeItem>, String>>);
+        let mut equipped = use_state(BTreeMap::<String, Value>::new);
         let selected_kind = use_state(|| "all".to_string());
         let search = use_state(String::new);
         let reload = use_state(|| 0u64);
@@ -277,8 +277,11 @@ impl Component for Cosmetics {
         }
 
         let retry = {
-            let reload = reload;
-            move || reload.set(*reload.peek() + 1)
+            let mut reload = reload;
+            move || {
+                let next = *reload.peek() + 1;
+                reload.set(next);
+            }
         };
         let body: Element = match &catalog_value {
             None => centered_note("Loading wardrobe…"),
@@ -517,7 +520,7 @@ fn preview_panel(
     };
 
     let clear_key = account_key.clone();
-    let clear_state = equipped;
+    let mut clear_state = equipped;
     let clear_enabled = has_account && !current.is_empty();
 
     let mut model = PlayerModel::new(account_uuid.unwrap_or_default());
@@ -584,6 +587,7 @@ fn preview_panel(
                     clear_state.set(BTreeMap::new());
                 }),
         )
+        .into()
 }
 
 fn parse_catalog(value: Value) -> Result<Vec<WardrobeItem>, String> {
@@ -629,7 +633,7 @@ fn parse_catalog(value: Value) -> Result<Vec<WardrobeItem>, String> {
     Ok(items)
 }
 
-fn toggle(account: &str, item: &WardrobeItem, equipped: State<BTreeMap<String, Value>>) {
+fn toggle(account: &str, item: &WardrobeItem, mut equipped: State<BTreeMap<String, Value>>) {
     if account.is_empty() || item.slots.is_empty() {
         return;
     }
