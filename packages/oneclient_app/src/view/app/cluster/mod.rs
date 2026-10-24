@@ -9,7 +9,6 @@ mod folder_list;
 mod imported_modpacks;
 mod modpack_settings;
 mod mods;
-mod performance;
 mod process_logs;
 mod screenshots;
 mod shaders;

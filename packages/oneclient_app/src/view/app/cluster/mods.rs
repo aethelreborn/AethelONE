@@ -47,15 +47,6 @@ impl Component for ClusterMods {
             return cluster_not_found();
         };
 
-        // The mods that raise the frame rate the most, with the ones the
-        // instance already carries left out
-        let performance =
-            crate::recommended::performance_picks_for(cluster.mc_loader, &cluster.mc_version);
-        let installed: Vec<String> = content_items
-            .iter()
-            .filter_map(|item| item.project_id.clone())
-            .collect();
-
         let all_categories = bundle_categories(&bundle_items);
         let mut items = bundle_packages(
             content_items,
@@ -84,16 +75,6 @@ impl Component for ClusterMods {
                 folder: oneclient_common::paths::cluster_mods_dir(&cluster.folder_name).ok(),
             })
             .child(ModHealthBanner { issues: health })
-            .maybe_child((!performance.is_empty()).then(|| {
-                PerformanceSet {
-                    cluster_id: self.cluster_id,
-                    picks: performance,
-                    installed: installed.clone(),
-                    mc_version: cluster.mc_version.clone(),
-                    loader: cluster.mc_loader,
-                }
-                .into_element()
-            }))
             .child(
                 PackageManager::new(
                     "Mods",

@@ -3,7 +3,6 @@ use oneclient_content::packages::{ContentType, GameLoader, ProviderId};
 
 /// A hand-picked catalog of widely used client-side packages, offered as the Recommended tab.
 /// Ids are Modrinth project ids verified against the live API — never guess them when editing.
-#[derive(PartialEq)]
 pub struct RecommendedPackage {
     pub provider: ProviderId,
     pub project_id: &'static str,
@@ -232,28 +231,6 @@ pub fn project_ids(content_type: ContentType, provider: ProviderId) -> Vec<Strin
         .collect()
 }
 
-/// The packages that raise the frame rate the most, in the order they help:
-/// the renderer first, then the game logic, then the drawing and the memory
-pub const PERFORMANCE_PACKAGES: &[&str] = &[
-    "AANobbMI", // Sodium
-    "gvQqBUqZ", // Lithium
-    "5ZwdcRci", // ImmediatelyFast
-    "uXXizFIs", // FerriteCore
-    "NNAgCjsB", // Entity Culling
-];
-
-/// The performance packages a loader and a game version can run
-pub fn performance_picks_for(
-    loader: GameLoader,
-    mc_version: &str,
-) -> Vec<&'static RecommendedPackage> {
-    PERFORMANCE_PACKAGES
-        .iter()
-        .filter_map(|id| RECOMMENDED_PACKAGES.iter().find(|p| p.project_id == *id))
-        .filter(|p| loader_ok(p, loader) && mc_at_least(mc_version, p.since))
-        .collect()
-}
-
 fn loader_ok(p: &RecommendedPackage, loader: GameLoader) -> bool {
     p.loaders.is_empty() || p.loaders.contains(&loader)
 }
@@ -319,54 +296,4 @@ mod tests {
         assert!(!loader_ok(sodium, GameLoader::Vanilla));
     }
 
-    #[test]
-    fn the_performance_set_starts_with_the_renderer() {
-        let picks = performance_picks_for(GameLoader::Fabric, "1.21.4");
-        let names: Vec<&str> = picks.iter().map(|p| p.name).collect();
-
-        assert_eq!(
-            names,
-            vec![
-                "Sodium",
-                "Lithium",
-                "ImmediatelyFast",
-                "FerriteCore",
-                "Entity Culling"
-            ]
-        );
-    }
-
-    #[test]
-    fn the_performance_set_only_offers_what_the_loader_can_run() {
-        let picks = performance_picks_for(GameLoader::Forge, "1.21.4");
-        let names: Vec<&str> = picks.iter().map(|p| p.name).collect();
-
-        assert_eq!(
-            names,
-            vec!["ImmediatelyFast", "FerriteCore", "Entity Culling"],
-            "the catalog has no forge build of the renderer or of the game logic"
-        );
-    }
-
-    #[test]
-    fn the_performance_set_only_offers_what_the_game_version_supports() {
-        let picks = performance_picks_for(GameLoader::Fabric, "1.12.2");
-        let names: Vec<&str> = picks.iter().map(|p| p.name).collect();
-
-        assert_eq!(
-            names,
-            vec!["Entity Culling"],
-            "only the one that still runs on a game this old is offered"
-        );
-    }
-
-    #[test]
-    fn every_performance_package_is_in_the_catalog() {
-        for id in PERFORMANCE_PACKAGES {
-            assert!(
-                RECOMMENDED_PACKAGES.iter().any(|p| p.project_id == *id),
-                "{id} is not in the catalog"
-            );
-        }
-    }
 }

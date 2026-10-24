@@ -125,16 +125,6 @@ impl GameSettingsProfile {
         }
         if self.os_extra.is_none() {
             self.os_extra = global.os_extra.clone();
-        } else if let (Some(extra), Some(global_extra)) =
-            (self.os_extra.as_mut(), global.os_extra.as_ref())
-        {
-            // An instance that overrides one thing still inherits the rest
-            if extra.gpu.is_none() {
-                extra.gpu = global_extra.gpu.clone();
-            }
-            if extra.performance_mode.is_none() {
-                extra.performance_mode = global_extra.performance_mode;
-            }
         }
         if self.browser_update_mode.is_none() {
             self.browser_update_mode = global.browser_update_mode;
@@ -223,61 +213,4 @@ mod tests {
         assert_eq!(written, original);
     }
 
-    #[test]
-    fn an_instance_that_overrides_one_thing_inherits_the_rest() {
-        let global = GameSettingsProfile {
-            name: "Global".to_string(),
-            os_extra: Some(SettingsOsExtra {
-                gpu: Some("the-global-gpu".to_string()),
-                performance_mode: Some(PerformanceMode::LowSpec),
-                ..Default::default()
-            }),
-            ..GameSettingsProfile::default_global_profile()
-        };
-
-        let mut instance = GameSettingsProfile {
-            name: "Instance".to_string(),
-            os_extra: Some(SettingsOsExtra {
-                performance_mode: Some(PerformanceMode::Balanced),
-                ..Default::default()
-            }),
-            ..GameSettingsProfile::default_global_profile()
-        };
-
-        instance.merge_global(&global);
-
-        let extra = instance.os_extra.expect("the instance keeps its own extra");
-        assert_eq!(extra.performance_mode, Some(PerformanceMode::Balanced));
-        assert_eq!(
-            extra.gpu.as_deref(),
-            Some("the-global-gpu"),
-            "the gpu the instance never picked is still the global one"
-        );
-    }
-
-    #[test]
-    fn an_instance_without_an_extra_inherits_the_whole_of_it() {
-        let global = GameSettingsProfile {
-            name: "Global".to_string(),
-            os_extra: Some(SettingsOsExtra {
-                performance_mode: Some(PerformanceMode::Balanced),
-                ..Default::default()
-            }),
-            ..GameSettingsProfile::default_global_profile()
-        };
-
-        let mut instance = GameSettingsProfile {
-            name: "Instance".to_string(),
-            os_extra: None,
-            ..GameSettingsProfile::default_global_profile()
-        };
-
-        instance.merge_global(&global);
-
-        assert_eq!(
-            instance.performance_mode(),
-            PerformanceMode::Balanced,
-            "the instance never said otherwise, so it runs the global mode"
-        );
-    }
 }
