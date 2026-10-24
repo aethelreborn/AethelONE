@@ -1,3 +1,9 @@
+## 2.37.0 (2026-10-24)
+
+### Features
+
+- Added a cosmetics wardrobe to the launcher
+
 ## 2.36.0 (2026-10-22)
 
 ### Features
