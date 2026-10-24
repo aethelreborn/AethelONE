@@ -22,7 +22,6 @@ use super::cluster_not_found;
 use super::package_manager::{
     PackageManager, bundle_categories, bundle_packages, stale_page_updates, use_content_meta,
 };
-use super::performance::PerformanceSet;
 use crate::hooks::use_cluster;
 
 #[derive(PartialEq)]
