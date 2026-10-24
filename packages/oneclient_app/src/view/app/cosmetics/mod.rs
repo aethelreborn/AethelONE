@@ -462,7 +462,7 @@ fn preview_panel(
             let slot_name = slot_label(slot).to_string();
             let remove_slot = slot.clone();
             let key = account_key.clone().unwrap_or_default();
-            let equipped_state = equipped;
+            let mut equipped_state = equipped;
             rows.push(
                 rect()
                     .horizontal()
