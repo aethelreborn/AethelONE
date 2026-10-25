@@ -351,6 +351,7 @@ fn make_row(
 #[derive(Clone)]
 pub(super) enum Tab {
     All,
+    Updates,
     Recommended,
     Category(String),
     Browser,
@@ -362,6 +363,7 @@ impl Tab {
     pub(super) fn label(&self) -> String {
         match self {
             Tab::All => "All".to_string(),
+            Tab::Updates => "Updates".to_string(),
             Tab::Recommended => "Recommended".to_string(),
             Tab::Category(c) => c.clone(),
             Tab::Browser => "Online".to_string(),
@@ -376,6 +378,8 @@ impl Tab {
         }
         match self {
             Tab::All => p.opted_in,
+            // Same membership as the Outdated badge on the row
+            Tab::Updates => p.is_outdated(),
             // Recommended rows come from the curated catalog via `recommended_rows` never from `items`
             Tab::Recommended => false,
             Tab::Category(c) => p.categories.iter().any(|pc| pc == c),
@@ -509,6 +513,10 @@ fn build_tabs(
 
     // Category tabs are hidden when empty All + Online + Local are always shown
     let mut tabs: Vec<Tab> = vec![Tab::All];
+    // Updates sits right after All while anything on the page can be updated
+    if items.iter().any(|p| hidden.keep(p) && p.is_outdated()) {
+        tabs.push(Tab::Updates);
+    }
     if has_recommended {
         tabs.push(Tab::Recommended);
     }
@@ -1081,6 +1089,43 @@ mod tests {
             without.as_slice(),
             [Tab::All, Tab::Browser, Tab::Local]
         ));
+    }
+
+    #[test]
+    fn updates_chip_sits_right_after_all_while_anything_is_outdated() {
+        let mut outdated = entry(None, true, Some("h1"), false, false);
+        outdated.update_available = true;
+        let fresh = entry(None, true, Some("h2"), false, false);
+
+        let tabs = build_tabs(&[], &[outdated.clone(), fresh], HiddenFilter::Hide, true);
+        assert!(matches!(
+            tabs.as_slice(),
+            [Tab::All, Tab::Updates, Tab::Recommended, ..]
+        ));
+        assert!(Tab::Updates.matches(&outdated));
+
+        let updated_row = entry(None, true, Some("h3"), false, false);
+        let updated = build_tabs(&[], &[updated_row], HiddenFilter::Hide, false);
+        assert!(matches!(
+            updated.as_slice(),
+            [Tab::All, Tab::Browser, Tab::Local]
+        ));
+    }
+
+    #[test]
+    fn updates_tab_holds_only_rows_that_show_the_outdated_badge() {
+        // Bundle packages update through the bundle flow so they never carry the badge
+        let mut bundled = entry(Some("Performance"), true, Some("h1"), false, false);
+        bundled.update_available = true;
+        let mut deleted = entry(None, true, Some("h2"), false, false);
+        deleted.update_available = true;
+        deleted.deleted = true;
+        let mut outdated = entry(None, true, Some("h3"), false, false);
+        outdated.update_available = true;
+
+        assert!(!Tab::Updates.matches(&bundled));
+        assert!(!Tab::Updates.matches(&deleted));
+        assert!(Tab::Updates.matches(&outdated));
     }
 
     #[test]
