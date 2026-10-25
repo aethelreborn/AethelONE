@@ -9,12 +9,30 @@ use freya::prelude::*;
 
 use oneclient_core::game::{DayPlaytime, WEEKDAY_LABELS};
 
+use crate::components::{Segment, SegmentedControl};
 use crate::theme::colors;
 use crate::utils::{format_day, format_duration, parse_day};
 
 use super::chart_card;
 
-const WEEKS: i64 = 26;
+const DEFAULT_WEEKS: i64 = 26;
+
+#[derive(Clone, Copy, PartialEq)]
+enum HeatmapRange {
+    Thirteen,
+    TwentySix,
+    FiftyTwo,
+}
+
+impl HeatmapRange {
+    fn weeks(self) -> i64 {
+        match self {
+            HeatmapRange::Thirteen => 13,
+            HeatmapRange::TwentySix => 26,
+            HeatmapRange::FiftyTwo => 52,
+        }
+    }
+}
 const CELL: f32 = 14.;
 const GAP: f32 = 4.;
 
@@ -36,9 +54,12 @@ impl PlaytimeHeatmap {
 impl Component for PlaytimeHeatmap {
     fn render(&self) -> impl IntoElement {
         let mut readout = use_state(|| "Hover a day for details".to_string());
+        let range = use_state(|| HeatmapRange::TwentySix);
+
+        let weeks = range.read().weeks();
 
         let today = Local::now().date_naive();
-        let start = monday_on_or_before(today - Duration::days(WEEKS * 7 - 1));
+        let start = monday_on_or_before(today - Duration::days(weeks * 7 - 1));
 
         let by_day: HashMap<NaiveDate, i64> = self
             .daily
@@ -57,7 +78,7 @@ impl Component for PlaytimeHeatmap {
         let active = nonzero.len();
         let span_days = (today - start).num_days() + 1;
         let subtitle = if active == 0 {
-            format!("No playtime in the last {} weeks", WEEKS)
+            format!("No playtime in the last {} weeks", weeks)
         } else {
             let best = nonzero.last().copied().unwrap_or(0);
             format!(
@@ -208,7 +229,14 @@ impl Component for PlaytimeHeatmap {
             )
             .child(legend);
 
-        chart_card("Playtime calendar", subtitle, None, body.into_element())
+        let control = SegmentedControl::new(range)
+            .height(30.)
+            .segment(Segment::new(HeatmapRange::Thirteen).label("13W"))
+            .segment(Segment::new(HeatmapRange::TwentySix).label("26W"))
+            .segment(Segment::new(HeatmapRange::FiftyTwo).label("52W"))
+            .into_element();
+
+        chart_card("Playtime calendar", subtitle, Some(control), body.into_element())
     }
 }
 
