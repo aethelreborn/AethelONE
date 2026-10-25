@@ -541,7 +541,7 @@ fn updates_pill_label(count: u32) -> String {
 pub fn updates_pill(count: u32) -> Element {
     badge_pill(
         updates_pill_label(count),
-        Color::from_af32rgb(1.0, 255.0, 196.0, 96.0),
+        Color::from_af32rgb(1.0, 255, 196, 96),
     )
 }
 
