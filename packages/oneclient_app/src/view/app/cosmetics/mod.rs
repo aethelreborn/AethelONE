@@ -515,7 +515,19 @@ fn preview_panel(
     }
 
     let equipped_body: Element = if rows.is_empty() {
-        centered_note("Nothing equipped yet")
+        // Flex height so the empty note absorbs the remaining space instead
+        // of pushing the clear button past the bottom of the panel.
+        rect()
+            .width(Size::fill())
+            .height(Size::flex(1.0))
+            .center()
+            .child(
+                label()
+                    .text("Nothing equipped yet")
+                    .font_size(14.)
+                    .color(colors::fg_secondary()),
+            )
+            .into_element()
     } else {
         ScrollArea::new()
             .width(Size::fill())

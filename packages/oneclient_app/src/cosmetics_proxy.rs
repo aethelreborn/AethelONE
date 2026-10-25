@@ -544,6 +544,11 @@ async fn refresh_catalog(
     let value = serde_json::from_slice::<Value>(&bytes)
         .map_err(|err| format!("catalog decode failed: {err}"))?;
     if let Some(path) = disk {
+        // The state directory may not exist yet on a fresh home, and a
+        // missing parent silently drops the cache write.
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let _ = std::fs::write(path, &bytes);
     }
     // Only a successful refresh restarts the TTL clock: a failed one must
