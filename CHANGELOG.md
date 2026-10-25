@@ -1,3 +1,9 @@
+## 2.38.0 (2026-10-25)
+
+### Features
+
+- Added an Updates tab to the content pages
+
 ## 2.37.1 (2026-10-25)
 
 ### Fixes
