@@ -42,6 +42,6 @@ pub use store::{LiveSync, LocalImportReport, PackageStore};
 pub use types::*;
 pub use updates::{
     BrowserPackageUpdate, BrowserUpdateCheck, apply_browser_package_update,
-    cached_browser_package_updates, check_browser_package_updates, refresh_browser_package_updates,
-    skip_browser_package_update,
+    cached_browser_package_updates, cached_package_update_counts, check_browser_package_updates,
+    refresh_browser_package_updates, skip_browser_package_update,
 };

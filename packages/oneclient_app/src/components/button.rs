@@ -512,15 +512,79 @@ pub fn running_pill() -> Element {
     rect()
         .position(Position::new_absolute().top(8.).right(8.))
         .layer(Layer::Relative(8))
+        .child(badge_pill("Running".to_string(), colors::success()))
+        .into()
+}
+
+/// Same chrome as the running pill so both badges read as one family.
+fn badge_pill(text: String, fg: Color) -> Element {
+    rect()
         .padding(Gaps::new_symmetric(4., 8.))
         .corner_radius(CornerRadius::new_all(6.))
         .background(Color::from_af32rgb(0.66, 11, 16, 19))
         .child(
             label()
-                .text("Running")
+                .text(text)
                 .font_size(11.)
                 .font_weight(FontWeight::MEDIUM)
-                .color(colors::success()),
+                .color(fg),
         )
         .into()
+}
+
+fn updates_pill_label(count: u32) -> String {
+    format!("{count} update{}", if count == 1 { "" } else { "s" })
+}
+
+/// Inline "N updates" badge for dense rows The amber is a stand-in for a
+/// warning color the theme does not ship yet
+pub fn updates_pill(count: u32) -> Element {
+    badge_pill(
+        updates_pill_label(count),
+        Color::from_af32rgb(1.0, 255.0, 196.0, 96.0),
+    )
+}
+
+/// Corner badges for an instance card: pending updates above any caller
+/// specific badge (the version card's instance count) above the running
+/// state stacked top-right `extra` already carries its own chrome
+pub fn card_pills(
+    updates: u32,
+    running: bool,
+    extra: Option<Element>,
+) -> Option<Element> {
+    if updates == 0 && !running && extra.is_none() {
+        return None;
+    }
+
+    let mut pills = rect()
+        .vertical()
+        .position(Position::new_absolute().top(8.).right(8.))
+        .layer(Layer::Relative(8))
+        .spacing(4.)
+        .cross_align(Alignment::End);
+
+    if updates > 0 {
+        pills = pills.child(updates_pill(updates));
+    }
+    if let Some(extra) = extra {
+        pills = pills.child(extra);
+    }
+    if running {
+        pills = pills.child(badge_pill("Running".to_string(), colors::success()));
+    }
+
+    Some(pills.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::updates_pill_label;
+
+    #[test]
+    fn updates_pill_label_plurals() {
+        assert_eq!(updates_pill_label(1), "1 update");
+        assert_eq!(updates_pill_label(0), "0 updates");
+        assert_eq!(updates_pill_label(12), "12 updates");
+    }
 }

@@ -4,6 +4,7 @@ use oneclient_core::clusters::Cluster;
 use crate::components::cluster_menu::open_menu_at;
 use crate::components::{
     ART_PREVIEW_EDGE, ClusterContextMenu, ClusterMenuTarget, DynamicArt, on_secondary, running_pill,
+    updates_pill,
 };
 use crate::hooks::use_game_snapshot;
 use crate::theme::colors;
@@ -20,6 +21,7 @@ pub struct InstanceRow {
     played: String,
     art: DynamicArt,
     selected: bool,
+    updates: u32,
     on_press: EventHandler<Event<PressEventData>>,
     on_context: Option<EventHandler<(f32, f32)>>,
     pub menu: Option<ClusterMenuTarget>,
@@ -28,6 +30,11 @@ pub struct InstanceRow {
 impl InstanceRow {
     pub fn menu(mut self, target: Option<ClusterMenuTarget>) -> Self {
         self.menu = target;
+        self
+    }
+
+    pub fn updates(mut self, count: u32) -> Self {
+        self.updates = count;
         self
     }
 
@@ -43,6 +50,7 @@ impl InstanceRow {
             played: last_played_label(cluster.last_played),
             art: DynamicArt::for_cluster(cluster).max_edge(ART_PREVIEW_EDGE),
             selected,
+            updates: 0,
             on_press: on_press.into(),
             on_context: None,
             menu: None,
@@ -64,6 +72,7 @@ impl InstanceRow {
             art: DynamicArt::for_version(line.major, line_art_key(line, clusters), None)
                 .max_edge(ART_PREVIEW_EDGE),
             selected,
+            updates: 0,
             on_press: on_press.into(),
             on_context: None,
             menu: None,
@@ -85,6 +94,7 @@ impl PartialEq for InstanceRow {
             && self.played == other.played
             && self.art == other.art
             && self.selected == other.selected
+            && self.updates == other.updates
             && self.menu == other.menu
     }
 }
@@ -179,6 +189,7 @@ impl Component for InstanceRow {
                             .color(colors::fg_secondary()),
                     ),
             )
+            .maybe_child((self.updates > 0).then(|| updates_pill(self.updates)))
             .child(
                 label()
                     .text(self.played.clone())

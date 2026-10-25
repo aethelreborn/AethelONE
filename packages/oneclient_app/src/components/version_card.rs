@@ -3,7 +3,7 @@ use oneclient_core::clusters::Cluster;
 
 use crate::components::cluster_menu::open_menu_at;
 use crate::components::{
-    ART_PREVIEW_EDGE, ClusterContextMenu, ClusterMenuTarget, DynamicArt, on_secondary, running_pill,
+    ART_PREVIEW_EDGE, ClusterContextMenu, ClusterMenuTarget, DynamicArt, card_pills, on_secondary,
 };
 use crate::hooks::use_game_snapshot;
 use crate::theme::colors;
@@ -19,6 +19,7 @@ pub struct VersionCard {
     pub caption: String,
     pub count: usize,
     pub selected: bool,
+    pub updates: u32,
     pub on_press: EventHandler<Event<PressEventData>>,
     on_context: Option<EventHandler<(f32, f32)>>,
     pub menu: Option<ClusterMenuTarget>,
@@ -27,6 +28,11 @@ pub struct VersionCard {
 impl VersionCard {
     pub fn menu(mut self, target: Option<ClusterMenuTarget>) -> Self {
         self.menu = target;
+        self
+    }
+
+    pub fn updates(mut self, count: u32) -> Self {
+        self.updates = count;
         self
     }
 
@@ -45,6 +51,7 @@ impl VersionCard {
             caption,
             count: clusters.len(),
             selected,
+            updates: 0,
             on_press: on_press.into(),
             on_context: None,
             menu: None,
@@ -63,6 +70,7 @@ impl VersionCard {
             caption: format!("{} \u{b7} {}", cluster.mc_version, cluster.mc_loader),
             count: 1,
             selected,
+            updates: 0,
             on_press: on_press.into(),
             on_context: None,
             menu: None,
@@ -84,6 +92,7 @@ impl PartialEq for VersionCard {
             && self.caption == other.caption
             && self.count == other.count
             && self.selected == other.selected
+            && self.updates == other.updates
             && self.menu == other.menu
     }
 }
@@ -119,6 +128,21 @@ impl Component for VersionCard {
             border_all_color(1., colors::component_border())
         };
 
+        let instances_badge = (self.count > 1).then(|| {
+            rect()
+                .padding(Gaps::new_symmetric(4., 8.))
+                .corner_radius(CornerRadius::new_all(6.))
+                .background(Color::from_af32rgb(0.66, 11, 16, 19))
+                .child(
+                    label()
+                        .text(format!("{} instances", self.count))
+                        .font_size(11.)
+                        .font_weight(FontWeight::MEDIUM)
+                        .color(colors::fg_primary()),
+                )
+                .into()
+        });
+        let badges = card_pills(self.updates, running, instances_badge);
         let card = rect()
             .key(self.key)
             .width(Size::fill())
@@ -183,23 +207,7 @@ impl Component for VersionCard {
                             .color(colors::fg_secondary()),
                     ),
             )
-            .maybe_child((self.count > 1).then(|| {
-                rect()
-                    .position(Position::new_absolute().top(8.).right(8.))
-                    .layer(Layer::Relative(4))
-                    .padding(Gaps::new_symmetric(4., 8.))
-                    .corner_radius(CornerRadius::new_all(6.))
-                    .background(Color::from_af32rgb(0.66, 11, 16, 19))
-                    .child(
-                        label()
-                            .text(format!("{} instances", self.count))
-                            .font_size(11.)
-                            .font_weight(FontWeight::MEDIUM)
-                            .color(colors::fg_primary()),
-                    )
-                    .into_element()
-            }))
-            .maybe_child(running.then(running_pill));
+            .maybe_child(badges);
         match self.on_context.clone() {
             Some(on_context) => card
                 .on_secondary_down(on_secondary(Some(on_context)))

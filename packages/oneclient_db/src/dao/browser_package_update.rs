@@ -24,6 +24,17 @@ pub async fn list_for_cluster(
     .await
 }
 
+/// Pending update rows per cluster for the instance badges Skipped rows still
+/// count since they still read as out of date everywhere else Runtime query:
+/// the checked macro cache cannot be regenerated without a local toolchain
+pub async fn count_by_cluster(pool: &SqlitePool) -> Result<Vec<(i64, i64)>, sqlx::Error> {
+    sqlx::query_as::<_, (i64, i64)>(
+        "SELECT cluster_id, COUNT(*) FROM browser_package_updates GROUP BY cluster_id",
+    )
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn list_all(pool: &SqlitePool) -> Result<Vec<BrowserPackageUpdateRow>, sqlx::Error> {
     sqlx::query_as!(
         BrowserPackageUpdateRow,
@@ -242,5 +253,32 @@ mod tests {
         retain_hashes(&pool, 1, &[]).await.expect("retain");
 
         assert!(list_for_cluster(&pool, 1).await.expect("list").is_empty());
+    }
+
+    #[tokio::test]
+    async fn counts_group_by_cluster_and_keep_skipped_rows() {
+        let pool = pool().await;
+        sqlx::query(
+            r#"
+			INSERT INTO clusters (id, name, folder_name, mc_version)
+			VALUES (2, 'two', 'two', '1.20.1')
+			"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("second cluster row");
+
+        record(&pool, "abc", "v2").await;
+        record(&pool, "def", "v2").await;
+        upsert(&pool, 2, "ghi", 0, "proj", "v1", "1.0.0", "v2", "2.0.0", "Mod")
+            .await
+            .expect("second cluster upsert");
+        set_skipped(&pool, 1, "abc", true).await.expect("skip");
+
+        let mut counts: std::collections::HashMap<i64, i64> =
+            count_by_cluster(&pool).await.expect("counts").into_iter().collect();
+        assert_eq!(counts.remove(&1), Some(2), "cluster one keeps both rows");
+        assert_eq!(counts.remove(&2), Some(1), "cluster two is counted too");
+        assert!(counts.is_empty());
     }
 }

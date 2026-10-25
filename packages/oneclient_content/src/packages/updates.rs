@@ -5,7 +5,7 @@
 //! The `browser_package_updates` cache is only narrowed by a check that reached
 //! the provider so an offline run is a no-op rather than "all up to date"
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
@@ -412,6 +412,17 @@ pub async fn cached_browser_package_updates(
         .await?
         .into_iter()
         .map(BrowserPackageUpdate::from_row)
+        .collect())
+}
+
+/// Pending update counts for every cluster in one read for the instance badges
+/// Never touches the network
+#[tracing::instrument(level = "debug", skip(ctx))]
+pub async fn cached_package_update_counts(ctx: &ContentCtx) -> ContentResult<HashMap<i64, u32>> {
+    Ok(update_dao::count_by_cluster(&ctx.db)
+        .await?
+        .into_iter()
+        .map(|(cluster_id, count)| (cluster_id, u32::try_from(count).unwrap_or(u32::MAX)))
         .collect())
 }
 

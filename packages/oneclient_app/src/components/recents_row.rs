@@ -11,10 +11,11 @@ use super::cluster_menu::cluster_menu_entries;
 use super::dynamic_art::use_art_bytes;
 use super::local_image::decode;
 use crate::components::{
-    ART_PREVIEW_EDGE, ContextMenu, DynamicArt, Icon, IconType, LocalImage, running_pill,
+    ART_PREVIEW_EDGE, ContextMenu, DynamicArt, Icon, IconType, LocalImage, card_pills,
 };
 use crate::hooks::{
-    settled_or_loading, use_active_cluster_id, use_clusters, use_dispatch, use_game_snapshot,
+    package_update_counts, settled_or_loading, use_active_cluster_id, use_clusters, use_dispatch,
+    use_game_snapshot, use_package_update_counts,
 };
 use crate::motion::use_animations_enabled;
 use crate::routes::Route;
@@ -57,6 +58,9 @@ impl Component for RecentsRow {
 
         let clusters = settled_or_loading(&clusters_query).unwrap_or_default();
 
+        let counts_query = use_package_update_counts();
+        let counts = package_update_counts(&counts_query);
+
         let sorted: Vec<Cluster> = sort_clusters_for_home(clusters);
 
         let slots =
@@ -89,6 +93,7 @@ impl Component for RecentsRow {
                     index,
                     items,
                     progress,
+                    updates: counts.get(&cluster.id).copied().unwrap_or(0),
                     key: DiffKey::None,
                 }
                 .key(cluster.id)
@@ -141,6 +146,7 @@ struct ClusterCard {
     index: usize,
     items: usize,
     progress: f32,
+    updates: u32,
     key: DiffKey,
 }
 
@@ -160,6 +166,7 @@ impl PartialEq for ClusterCard {
             && self.index == other.index
             && self.items == other.items
             && self.progress == other.progress
+            && self.updates == other.updates
     }
 }
 
@@ -340,7 +347,7 @@ impl Component for ClusterCard {
                                         Color::TRANSPARENT
                                     }),
                             )
-                            .maybe_child(running.then(running_pill)),
+                            .maybe_child(card_pills(self.updates, running, None)),
                     ),
             )
             .maybe_child(menu_overlay)

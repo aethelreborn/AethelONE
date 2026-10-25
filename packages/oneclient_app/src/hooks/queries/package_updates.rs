@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use freya::query::{Query, QueryCapability, UseQuery, use_query};
 use oneclient_core::{BrowserPackageUpdate, LauncherError};
@@ -47,4 +47,36 @@ pub fn stale_hashes(query: &UseQuery<PackageUpdatesQuery>) -> HashSet<String> {
         .into_iter()
         .map(|update| update.hash)
         .collect()
+}
+
+/// Pending update counts for every cluster in one read for the instance
+/// badges One query since Home and Versions cards each cover many clusters
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PackageUpdateCountsQuery;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PackageUpdateCountsKeys;
+
+impl QueryCapability for PackageUpdateCountsQuery {
+    type Ok = HashMap<ClusterId, u32>;
+    type Err = LauncherError;
+    type Keys = PackageUpdateCountsKeys;
+
+    async fn run(&self, _keys: &Self::Keys) -> Result<Self::Ok, Self::Err> {
+        let state = crate::launcher::state()?;
+        Ok(oneclient_core::cached_package_update_counts(&state.services.content()).await?)
+    }
+}
+
+pub fn use_package_update_counts() -> UseQuery<PackageUpdateCountsQuery> {
+    use_query(Query::new(
+        PackageUpdateCountsKeys,
+        PackageUpdateCountsQuery,
+    ))
+}
+
+pub fn package_update_counts(
+    query: &UseQuery<PackageUpdateCountsQuery>,
+) -> HashMap<ClusterId, u32> {
+    super::state::settled_or_loading(query).unwrap_or_default()
 }

@@ -15,9 +15,10 @@ use crate::components::{
     VersionCard, cluster_nav_entries, open_folder_button,
 };
 use crate::hooks::{
-    export_instance, import_instance, settled_or_loading, try_cluster_groups,
+    export_instance, import_instance, package_update_counts, settled_or_loading, try_cluster_groups,
     use_active_cluster_id, use_cluster_groups, use_clusters, use_dispatch, use_game_snapshot,
-    use_launcher, use_settings_snapshot, use_version_metadata, use_view_state,
+    use_launcher, use_package_update_counts, use_settings_snapshot, use_version_metadata,
+    use_view_state,
 };
 use crate::routes::Route;
 use crate::theme::colors;
@@ -114,6 +115,8 @@ pub struct Clusters;
 impl Component for Clusters {
     fn render(&self) -> impl IntoElement {
         let clusters_query = use_clusters();
+        let counts_query = use_package_update_counts();
+        let counts = package_update_counts(&counts_query);
         let active_id = use_active_cluster_id();
         let show_create = use_state(|| false);
         let mut selected = use_state(|| None::<GridSelection>);
@@ -375,13 +378,19 @@ impl Component for Clusters {
                     selected.set(Some(item));
                     selected_cluster.set(None);
                 };
+                let updates: u32 = list
+                    .iter()
+                    .map(|c| counts.get(&c.id).copied().unwrap_or(0))
+                    .sum();
                 if grid {
                     VersionCard::new(line, list, caption, is_selected, on_press)
                         .menu(line_menu)
+                        .updates(updates)
                         .into_element()
                 } else {
                     InstanceRow::for_line(line, list, caption, is_selected, on_press)
                         .menu(line_menu)
+                        .updates(updates)
                         .into_element()
                 }
             })
@@ -404,13 +413,16 @@ impl Component for Clusters {
                     };
                     let on_context =
                         move |pos: (f32, f32)| instance_menu.set(Some((pos.0, pos.1, id)));
+                    let updates = counts.get(&c.id).copied().unwrap_or(0);
                     if grid {
                         VersionCard::for_instance(c, is_selected, on_press)
                             .on_context(on_context)
+                            .updates(updates)
                             .into_element()
                     } else {
                         InstanceRow::new(c, is_selected, on_press)
                             .on_context(on_context)
+                            .updates(updates)
                             .into_element()
                     }
                 })

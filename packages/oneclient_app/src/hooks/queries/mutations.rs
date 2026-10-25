@@ -14,7 +14,7 @@ use super::cluster_content::{
     ClusterContentQuery, MigratableRoutesQuery, ModHealthQuery, ShadowedModsQuery,
 };
 use super::clusters::ListClustersQuery;
-use super::package_updates::PackageUpdatesQuery;
+use super::package_updates::{PackageUpdateCountsQuery, PackageUpdatesQuery};
 use super::settings_profiles::{
     ClusterProfileQuery, ClusterSettingsQuery, GameProfileQuery, ListNamedProfilesQuery,
 };
@@ -75,6 +75,11 @@ pub async fn invalidate_cluster_queries() {
     timed(
         "package_updates",
         QueriesStorage::<PackageUpdatesQuery>::invalidate_all(),
+    )
+    .await;
+    timed(
+        "package_update_counts",
+        QueriesStorage::<PackageUpdateCountsQuery>::invalidate_all(),
     )
     .await;
     timed(
