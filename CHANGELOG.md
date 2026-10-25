@@ -1,3 +1,9 @@
+## 2.39.0 (2026-10-25)
+
+### Features
+
+- Show pending mod updates on instance cards
+
 ## 2.38.0 (2026-10-25)
 
 ### Features
