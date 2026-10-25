@@ -1,3 +1,9 @@
+## 2.37.1 (2026-10-25)
+
+### Fixes
+
+- Fixed wardrobe layout in the cosmetics page
+
 ## 2.37.0 (2026-10-24)
 
 ### Features
