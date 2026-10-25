@@ -169,6 +169,7 @@ impl Component for Cosmetics {
                     .vertical()
                     .width(Size::flex(1.0))
                     .height(Size::px(196.))
+                    .content(Content::Flex)
                     .corner_radius(CornerRadius::new_all(12.))
                     .background(colors::page_elevated())
                     .border(border_all_color(
@@ -209,6 +210,7 @@ impl Component for Cosmetics {
                         rect()
                             .horizontal()
                             .width(Size::fill())
+                            .content(Content::Flex)
                             .child(
                                 label()
                                     .text(kind_label(&item.kind))
@@ -246,6 +248,7 @@ impl Component for Cosmetics {
                 rect()
                     .horizontal()
                     .width(Size::fill())
+                    .content(Content::Flex)
                     .height(Size::px(36.))
                     .padding(Gaps::new_symmetric(0., 10.))
                     .corner_radius(CornerRadius::new_all(8.))
@@ -351,6 +354,7 @@ impl Component for Cosmetics {
             .horizontal()
             .width(Size::fill())
             .height(Size::fill())
+            .content(Content::Flex)
             .overflow(Overflow::Clip)
             .padding(40.)
             .spacing(20.)
@@ -383,6 +387,7 @@ impl Component for Cosmetics {
                         rect()
                             .horizontal()
                             .width(Size::fill())
+                            .content(Content::Flex)
                             .spacing(16.)
                             .child(
                                 rect()
@@ -467,6 +472,7 @@ fn preview_panel(
                 rect()
                     .horizontal()
                     .width(Size::fill())
+                    .content(Content::Flex)
                     .height(Size::px(44.))
                     .spacing(8.)
                     .child(CoverImage { url: cover, size: 30. }.into_element())
@@ -530,6 +536,7 @@ fn preview_panel(
         .vertical()
         .width(Size::px(300.))
         .height(Size::fill())
+        .content(Content::Flex)
         .spacing(12.)
         .child(
             rect()
