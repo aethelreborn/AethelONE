@@ -527,6 +527,16 @@ async fn start(
         jvm_args.push(arg);
     }
 
+    // Native JVM crashes skip Minecraft's own crash handler, so point the JVM
+    // at the crash reports folder where the logs page already looks
+    let crash_dir = cluster.dir()?.join("crash-reports");
+    polyio::create_dir_all(&crash_dir).await.ok();
+    let error_file = crash_dir.join("hs_err_pid").display().to_string();
+    jvm_args.insert(
+        0,
+        format!("-XX:ErrorFile={}%p.log", error_file.replace('%', "%%")),
+    );
+
     let mut mc_args = arguments::minecraft_arguments(
         arg_map.get(&ArgumentType::Game).map(Vec::as_slice),
         version_info.minecraft_arguments.as_deref(),
@@ -1187,6 +1197,18 @@ pub async fn offer_repair(
     cluster_id: i64,
     diagnosis: &crate::game::diagnosis::CrashDiagnosis,
 ) {
+    // A slow shutdown has no repair, so explain it without offering to
+    // re-download the game for nothing
+    if !diagnosis.repairable() {
+        state
+            .services
+            .events
+            .notify(diagnosis.title())
+            .body(diagnosis.body())
+            .send();
+        return;
+    }
+
     enum Answer {
         Verify,
     }
@@ -1195,7 +1217,7 @@ pub async fn offer_repair(
         .services
         .events
         .ask(
-            oneclient_events::Prompt::new("A damaged file crashed the game", diagnosis.body())
+            oneclient_events::Prompt::new(diagnosis.title(), diagnosis.body())
                 .option(
                     oneclient_events::Choice::primary("verify", "Verify and repair"),
                     Answer::Verify,
@@ -1322,6 +1344,8 @@ fn shell_quote(arg: &str) -> String {
 
 fn apply_env(command: &mut Command, profile: &GameSettingsProfile) {
     command.env_remove("_JAVA_OPTIONS");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    command.env("LC_ALL", "C.UTF-8");
 
     if let Some(env) = &profile.launch_env {
         for pair in env.split_whitespace() {

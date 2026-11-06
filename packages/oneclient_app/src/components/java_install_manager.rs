@@ -7,13 +7,17 @@ use crate::theme::colors;
 use crate::ui::border_all_color;
 
 fn providers() -> Vec<(JavaVendor, &'static str)> {
-    vec![
+    let default = oneclient_java::vendors::default_vendor();
+    let mut providers = vec![
         (JavaVendor::Microsoft, "Microsoft JDK (Fastest/Recommended)"),
         (JavaVendor::Zulu, "Azul Zulu"),
         (JavaVendor::Adoptium, "Eclipse Temurin"),
         (JavaVendor::Corretto, "Amazon Corretto"),
         (JavaVendor::Liberica, "BellSoft Liberica"),
-    ]
+        (JavaVendor::Mojang, "Mojang"),
+    ];
+    providers.sort_by_key(|(vendor, _)| vendor != &default);
+    providers
 }
 
 /// Calls `on_install` with the chosen `(vendor, major)`

@@ -12,9 +12,20 @@ pub enum CrashDiagnosis {
         /// something to depend on
         file: Option<String>,
     },
+    /// Minecraft's own shutdown watchdog gave up waiting for the game to close
+    /// and turned a slow shutdown into a crash report
+    ShutdownTimeout,
 }
 
 impl CrashDiagnosis {
+    #[must_use]
+    pub fn title(&self) -> &'static str {
+        match self {
+            Self::CorruptArchive { .. } => "A damaged file crashed the game",
+            Self::ShutdownTimeout => "The game took too long to close",
+        }
+    }
+
     #[must_use]
     pub fn body(&self) -> String {
         match self {
@@ -26,7 +37,17 @@ impl CrashDiagnosis {
                  library or mod files - it is damaged. Verifying will re-download \
                  anything that does not match."
                 .to_string(),
+            Self::ShutdownTimeout => "Minecraft was still shutting down when its own watchdog \
+                 stopped waiting, so it closed itself and wrote a crash report. Nothing is \
+                 damaged. A large mod set is the usual reason a shutdown runs this long."
+                .to_string(),
         }
+    }
+
+    /// Verifying re-downloads the game and cannot make a slow shutdown faster
+    #[must_use]
+    pub fn repairable(&self) -> bool {
+        !matches!(self, Self::ShutdownTimeout)
     }
 }
 
@@ -39,18 +60,31 @@ const CORRUPT_ARCHIVE_MARKERS: [&str; 4] = [
     "zip END header not found",
 ];
 
+/// The watchdog writes both of these into the report it saves
+const SHUTDOWN_WATCHDOG_MARKERS: [&str; 2] =
+    ["ClientShutdownWatchdog", "Client watchdog shutdown details"];
+
 /// Runs against every line the game prints so it stays substring scans rather
 /// than anything that parses the line
 #[must_use]
 pub fn diagnose(line: &str) -> Option<CrashDiagnosis> {
-    if !CORRUPT_ARCHIVE_MARKERS
+    if CORRUPT_ARCHIVE_MARKERS
         .iter()
         .any(|marker| line.contains(marker))
     {
-        return None;
+        return Some(CrashDiagnosis::CorruptArchive { file: jar_in(line) });
     }
 
-    Some(CrashDiagnosis::CorruptArchive { file: jar_in(line) })
+    // After damage: a watchdog report carries a full thread dump, and a damaged
+    // jar named anywhere in it is still the thing to fix
+    if SHUTDOWN_WATCHDOG_MARKERS
+        .iter()
+        .any(|marker| line.contains(marker))
+    {
+        return Some(CrashDiagnosis::ShutdownTimeout);
+    }
+
+    None
 }
 
 /// Opportunistic some JVMs omit the path entirely and a missing name still
@@ -97,7 +131,7 @@ impl CrashWatch {
         {
             tracing::warn!(
                 ?diagnosis,
-                "recognised a repairable crash cause in the game log"
+                "recognised a crash cause in the game log"
             );
             *found = Some(diagnosis);
         }
@@ -111,6 +145,32 @@ impl CrashWatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shutdown_watchdog_is_recognised() {
+        // Both lines are copied from a real 26.2 watchdog report
+        let frame = "\tat knot//com.mojang.blaze3d.platform.ClientShutdownWatchdog\
+                     .lambda$startShutdownWatchdog$0(ClientShutdownWatchdog.java:44)";
+        assert_eq!(diagnose(frame), Some(CrashDiagnosis::ShutdownTimeout));
+        assert_eq!(
+            diagnose("-- Client watchdog shutdown details --"),
+            Some(CrashDiagnosis::ShutdownTimeout)
+        );
+    }
+
+    #[test]
+    fn a_slow_shutdown_offers_no_repair() {
+        assert!(!CrashDiagnosis::ShutdownTimeout.repairable());
+    }
+
+    #[test]
+    fn damage_outranks_a_slow_shutdown() {
+        let line = "ClientShutdownWatchdog saw java.util.zip.ZipException: bad.jar";
+        assert!(matches!(
+            diagnose(line),
+            Some(CrashDiagnosis::CorruptArchive { .. })
+        ));
+    }
 
     #[test]
     fn a_zip_exception_is_recognised() {

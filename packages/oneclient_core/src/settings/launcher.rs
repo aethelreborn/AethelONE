@@ -72,6 +72,8 @@ pub struct LauncherSettings {
     /// Newest snapshots kept per world; 0 keeps every snapshot
     pub world_backup_retention: usize,
     pub launch_behaviour: LaunchBehaviour,
+    /// Switches to the live game log once a cluster starts running
+    pub open_game_log_on_launch: bool,
     pub run_in_background: bool,
     pub show_tray_icon: bool,
     pub dynamic_background_enabled: bool,
@@ -138,6 +140,7 @@ impl Default for LauncherSettings {
             auto_world_backups: false,
             world_backup_retention: 5,
             launch_behaviour: LaunchBehaviour::default(),
+            open_game_log_on_launch: true,
             run_in_background: false,
             show_tray_icon: true,
             dynamic_background_enabled: true,

@@ -63,6 +63,11 @@ impl Component for SettingsLauncher {
             move || v
         });
 
+        let open_game_log = use_state({
+            let v = settings.open_game_log_on_launch;
+            move || v
+        });
+
         let allow_bundled_removal = use_state({
             let v = settings.allow_bundled_mod_removal;
             move || v
@@ -95,6 +100,7 @@ impl Component for SettingsLauncher {
             let background = *run_in_background.read();
             let tray = *show_tray_icon.read();
             let behaviour = *launch_behaviour.read();
+            let game_log = *open_game_log.read();
             let bundled_removal = *allow_bundled_removal.read();
             let world_backups = *auto_world_backups.read();
             let backup_retention = *world_backup_retention.read();
@@ -111,6 +117,7 @@ impl Component for SettingsLauncher {
                 next.run_in_background = background;
                 next.show_tray_icon = tray;
                 next.launch_behaviour = behaviour;
+                next.open_game_log_on_launch = game_log;
                 next.allow_bundled_mod_removal = bundled_removal;
                 next.auto_world_backups = world_backups;
                 next.world_backup_retention = backup_retention;
@@ -209,6 +216,16 @@ impl Component for SettingsLauncher {
                     launch_behaviour_field(launch_behaviour),
                     launch_behaviour,
                     defaults.launch_behaviour,
+                ),
+            ))
+            .child(settings_row(
+                IconType::Terminal,
+                "Open Game Log on Launch",
+                "Switch to the live game log once a cluster starts running.",
+                resettable(
+                    toggle(open_game_log),
+                    open_game_log,
+                    defaults.open_game_log_on_launch,
                 ),
             ))
             .child(settings_row(
